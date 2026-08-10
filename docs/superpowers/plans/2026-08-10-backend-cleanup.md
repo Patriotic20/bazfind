@@ -10,6 +10,11 @@
 
 **Spec:** `docs/superpowers/specs/2026-08-10-backend-cleanup-design.md`
 
+**Branch:** `backend-cleanup`, off `master` at `2836f37`.
+
+**11 tasks:** Phase 1 → Task 1. Phase 2 → Tasks 2-4. Phase 3 → Tasks 5-6. Phase 4 →
+Tasks 7-10. Phase 5 → Task 11.
+
 ## Global Constraints
 
 - Python `>=3.14`. `except A, B:` without parentheses is valid here (PEP 758) — do not "fix" it.
@@ -21,7 +26,9 @@
 - **All user-facing API strings are Uzbek** — error messages, `summary`, `description`. Code, identifiers, docstrings and commit messages stay English.
 - Every route needs an explicit unique `operation_id`; `tests/api/test_contract.py` asserts this.
 - **Never edit an existing Alembic revision.** Historical migrations are immutable, including their Google and `venue_types` references.
-- Each task ends on green tests and its own commit.
+- **Each task ends on green tests and its own commit.** No commit may leave the
+  application unrunnable — this is why Task 6 carries both its migration and its
+  readers instead of splitting them.
 
 ## File Structure
 
@@ -35,7 +42,7 @@
 - Modify: `app/modules/auth/api/v1/auth.py`, `services/auth_service.py`, `schemas/auth.py`, `schemas/__init__.py`, `models/__init__.py`, `enums.py`, `app/core/config.py`, `app/core/exceptions.py`, `app/core/handlers.py`, `app/main.py`, `app/core/database/models_registry.py`, `.env.template`
 - Create: one Alembic revision dropping `auth_identities`
 
-**Phase 3**
+**Phase 3** (one task — migration and readers together)
 - Create: `app/modules/venues/enums.py` — `VenueTypeSlug` + label map
 - Delete: `app/modules/catalog/models/venue_type.py`, `app/modules/catalog/repositories/venue_type_repository.py`, `app/modules/venues/models/venue_venue_type.py`
 - Modify: `app/modules/venues/models/venue.py`, `app/modules/venue_groups/models/venue_group.py`, `app/modules/venues/schemas/venue.py`, `repositories/venue_repository.py`, `services/venue_service.py`, `services/venue_onboarding_service.py`, `app/modules/catalog/api/v1/router.py`, `app/modules/catalog/services/catalog_service.py`, `tests/repositories/factories.py`
@@ -214,6 +221,20 @@ git commit -m "Declare auth as an HTTPBearer scheme instead of a raw header"
 - Consumes: nothing.
 - Produces: a go/no-go for Task 4. Task 3 may proceed regardless.
 
+> **ALREADY RUN — do not dispatch this task.** Executed by the controller against
+> the development database on 2026-08-10, before Task 1:
+>
+> ```
+> users total: 5
+> auth_identities rows: 0
+> users who would lose all access: 0
+> ```
+>
+> The table is empty, so no account can be stranded and nothing needs a product
+> decision. **The Task 4 gate is open.** The steps below are kept as the record of
+> what was checked and as the procedure to repeat before this migration is applied
+> to any other database — production above all, where the counts may differ.
+
 - [ ] **Step 1: Count Google-only accounts**
 
 ```bash
@@ -329,7 +350,8 @@ git commit -m "Remove Google authentication endpoint, service and settings"
 
 ### Task 4: Drop auth_identities and AuthProvider
 
-**Gate:** requires Task 2 to have reported `0`, or an explicit user decision.
+**Gate: OPEN.** Task 2 reported 0 `auth_identities` rows and 0 users who would lose
+access. Proceed.
 
 **Files:**
 - Delete: `app/modules/auth/models/auth_identity.py`
@@ -498,18 +520,30 @@ git add app/modules/venues/enums.py tests/test_venue_type_enum.py
 git commit -m "Add VenueTypeSlug enum with Uzbek labels and picker order"
 ```
 
-### Task 6: Migrate venue type from tables to columns
+### Task 6: Move venue type from tables to an enum column
+
+Migration and readers land together. Split apart, the migration commit drops
+`venue_types` while every reader still queries it — the suite goes red and the
+application is unrunnable at that commit. One task, one working state.
+
+This is the largest task in the plan. Work through the steps in order; the tests
+only go green once the readers are rewritten at Step 9.
 
 **Files:**
-- Modify: `app/modules/venues/models/venue.py`, `app/modules/venue_groups/models/venue_group.py`
-- Delete: `app/modules/venues/models/venue_venue_type.py`, `app/modules/catalog/models/venue_type.py`, `app/modules/catalog/repositories/venue_type_repository.py`
-- Modify: `app/modules/venues/models/__init__.py`, `app/modules/catalog/models/__init__.py`, `app/modules/catalog/repositories/__init__.py`, `app/core/database/models_registry.py`
 - Create: `app/alembic/versions/<generated>_venue_type_enum.py`
-- Test: `tests/test_models_registry.py`
+- Delete: `app/modules/venues/models/venue_venue_type.py`, `app/modules/catalog/models/venue_type.py`, `app/modules/catalog/repositories/venue_type_repository.py`
+- Modify (models): `app/modules/venues/models/venue.py`, `app/modules/venue_groups/models/venue_group.py`, `app/modules/venues/models/__init__.py`, `app/modules/catalog/models/__init__.py`, `app/modules/catalog/repositories/__init__.py`, `app/core/database/models_registry.py`
+- Modify (readers): `app/modules/venues/schemas/venue.py:143` and the create/update schemas, `app/modules/venues/repositories/venue_repository.py:76,192-195,324-344`, `app/modules/venues/services/venue_service.py:103-111`, `app/modules/venues/services/venue_onboarding_service.py:79,102,185`, `app/modules/catalog/api/v1/router.py:12-20`, `app/modules/catalog/services/catalog_service.py`, `tests/repositories/factories.py:51,94,97`
+- Test: `tests/test_models_registry.py`, `tests/api/test_venue_search_api.py`, `tests/api/test_venue_onboarding_api.py`, `tests/repositories/test_venue_repository.py`
 
 **Interfaces:**
-- Consumes: `VenueTypeSlug` from Task 5.
-- Produces: `Venue.venue_type: Mapped[VenueTypeSlug]` (not null) and `VenueGroup.primary_venue_type: Mapped[VenueTypeSlug]` (not null). `VenueType`, `VenueVenueType` and `VenueTypeRepository` no longer exist. Task 7 rewrites every reader.
+- Consumes: `VenueTypeSlug`, `VENUE_TYPE_LABELS` from Task 5.
+- Produces: `Venue.venue_type: Mapped[VenueTypeSlug]` (not null), `VenueGroup.primary_venue_type: Mapped[VenueTypeSlug]` (not null). `VenueType`, `VenueVenueType` and `VenueTypeRepository` no longer exist. Venue search takes `venue_type: VenueTypeSlug | None` instead of `venue_type_ids: list[int]`. `VenueDetailRead.venue_type: VenueTypeSlug` replaces `venue_types: list[VenueTypeRead]`. `factories.make_venue` takes `venue_type: VenueTypeSlug = VenueTypeSlug.RESTORAN`; `factories.get_venue_type` is deleted.
+
+**Already measured — do not re-run these queries.** In the development database:
+`kafe` 0 venues, `restoran` 2, `toyxona` 2; one venue group, primary type `toyxona`.
+The `kafe` fold therefore rewrites nothing. Keep the fold in the migration anyway —
+production may differ.
 
 - [ ] **Step 1: Report the kafe count before changing anything**
 
@@ -667,32 +701,19 @@ uv run alembic upgrade head
 ```
 Expected: all three succeed.
 
-- [ ] **Step 7: Run the model tests**
+- [ ] **Step 7: Check the model tests, and expect the readers to be red**
 
 Run: `APP_CONFIG__SECURITY__AUTH_MODE=enforced uv run pytest tests/test_models_registry.py -v`
-Expected: PASS. The rest of the suite still fails here — Task 7 fixes the readers. Do not "repair" those failures inside this task.
+Expected: PASS.
 
-- [ ] **Step 8: Commit**
+Then run the whole suite to see the work still ahead:
+`APP_CONFIG__SECURITY__AUTH_MODE=enforced uv run pytest -q`
+Expected: **failures** across venue search and onboarding — every reader still queries
+the dropped tables. That is the state Steps 8-13 exist to fix. **Do not commit here.**
+The single commit comes at Step 16, once the readers are green, so no commit in
+history leaves the application unrunnable.
 
-```bash
-git add -A
-git commit -m "Replace venue_types tables with a venue_type enum column
-
-Backfilled from venue_venue_types by lowest sort_order before the drop.
-Venue counts by type before migration: <paste Step 1 output>"
-```
-
-### Task 7: Rewrite every venue-type reader
-
-**Files:**
-- Modify: `app/modules/venues/schemas/venue.py:143` and the create/update schemas, `app/modules/venues/repositories/venue_repository.py:76,192-195,324-344`, `app/modules/venues/services/venue_service.py:103-111`, `app/modules/venues/services/venue_onboarding_service.py:79,102,185`, `app/modules/catalog/api/v1/router.py:12-20`, `app/modules/catalog/services/catalog_service.py`, `tests/repositories/factories.py:51,94,97`
-- Test: `tests/api/test_venue_search_api.py`, `tests/api/test_venue_onboarding_api.py`, `tests/repositories/test_venue_repository.py`
-
-**Interfaces:**
-- Consumes: `VenueTypeSlug`, `VENUE_TYPE_LABELS` from Task 5; `Venue.venue_type`, `VenueGroup.primary_venue_type` from Task 6.
-- Produces: venue search takes `venue_type: VenueTypeSlug | None` instead of `venue_type_ids: list[int]`. `VenueDetailRead.venue_type: VenueTypeSlug` replaces `venue_types: list[VenueTypeRead]`. `factories.make_venue` takes `venue_type: VenueTypeSlug = VenueTypeSlug.RESTORAN`; `factories.get_venue_type` is deleted.
-
-- [ ] **Step 1: Write the failing tests**
+- [ ] **Step 8: Write the failing reader tests**
 
 Append to `tests/api/test_venue_search_api.py`:
 
@@ -721,16 +742,16 @@ async def test_venue_types_endpoint_is_gone(client: AsyncClient) -> None:
 
 Confirm the real search path and its response envelope from the existing tests in the file before writing these — reuse whatever key that file already asserts on instead of assuming `items`.
 
-- [ ] **Step 2: Run to verify they fail**
+- [ ] **Step 9: Run to verify they fail**
 
 Run: `APP_CONFIG__SECURITY__AUTH_MODE=enforced uv run pytest tests/api/test_venue_search_api.py -v`
 Expected: FAIL.
 
-- [ ] **Step 3: Update the factories first**
+- [ ] **Step 10: Update the factories first**
 
 In `tests/repositories/factories.py` delete `get_venue_type`, and give `make_venue` and the group factory a `venue_type: VenueTypeSlug = VenueTypeSlug.RESTORAN` parameter that sets the new columns directly. Every other test file builds its fixtures through these, so this unblocks the whole suite at once.
 
-- [ ] **Step 4: Update the read path**
+- [ ] **Step 11: Update the read path**
 
 `venue_repository.py`: drop the `VenueVenueType` import and the subquery at 192-195, replacing the filter with `stmt.where(Venue.venue_type == venue_type)` guarded by `if venue_type is not None`. Change the `venue_types: Sequence[VenueType]` field on the detail dataclass (line 76) to `venue_type: VenueTypeSlug`, and delete the separate types query at 324-344 — the value now arrives on the venue row itself, so that round-trip disappears.
 
@@ -738,39 +759,47 @@ In `tests/repositories/factories.py` delete `get_venue_type`, and give `make_ven
 
 `venue.py` schemas: `VenueDetailRead.venue_types: list[VenueTypeRead]` becomes `venue_type: VenueTypeSlug`; the create/update schemas take `venue_type: VenueTypeSlug` and `VenueTypeSlug | None` respectively; the search filter schema takes `venue_type: VenueTypeSlug | None = None`.
 
-- [ ] **Step 5: Update onboarding and delete the catalog endpoint**
+- [ ] **Step 12: Update onboarding and delete the catalog endpoint**
 
 `venue_onboarding_service.py`: drop the `VenueTypeRepository` construction (line 79) and both `get_by_id` existence checks (102, 185). Pydantic rejects an invalid value before the service is reached, so those checks now only cost a query.
 
 `app/modules/catalog/api/v1/router.py`: delete the `list_venue_types` route and its `VenueTypeRead` import. Remove the corresponding method from `catalog_service.py`, and delete `VenueTypeRead` from the catalog schemas if nothing else uses it — `grep -rn VenueTypeRead app/` before deleting.
 
-- [ ] **Step 6: Run the full suite**
+- [ ] **Step 13: Run the full suite**
 
 Run: `APP_CONFIG__SECURITY__AUTH_MODE=enforced uv run pytest`
 Expected: PASS. Every venue-type reference in tests should now go through the enum.
 
-- [ ] **Step 7: Confirm nothing references the old shape**
+- [ ] **Step 14: Confirm nothing references the old shape**
 
 Run: `grep -rn "venue_type_id\|VenueVenueType\|VenueTypeRepository\|venue_types" app/ tests/`
 Expected: hits only under `app/alembic/versions/`.
 
-- [ ] **Step 8: Lint and type-check**
+- [ ] **Step 15: Lint and type-check**
 
 Run: `uv run ruff check . && uv run ruff format --check . && uv run mypy app`
 Expected: clean.
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 16: Commit — one commit for the whole task**
 
 ```bash
 git add -A
-git commit -m "Read venue type from the enum column and drop the venue-types endpoint"
+git commit -m "Replace the venue_types tables with a venue_type enum column
+
+Backfilled from venue_venue_types by lowest sort_order before the drop, so a
+multi-typed venue keeps restoran over toyxona. Readers move in the same commit:
+search filters on the column, VenueDetailRead carries a single value, and
+GET /v1/venue-types is gone. Splitting the migration from the readers would have
+left one commit where the tables are dropped and every reader still queries them.
+
+Venue counts by type before migration: <paste Step 1 output>"
 ```
 
 ---
 
 ## Phase 4 — Geo: admin CRUD and Uzbek reference data
 
-### Task 8: Add a platform-admin guard
+### Task 7: Add a platform-admin guard
 
 **Files:**
 - Modify: `app/core/dependencies.py` (after `GroupPermissionRequired`, ~line 324)
@@ -868,7 +897,7 @@ git add app/core/dependencies.py tests/api/test_permissions_api.py tests/reposit
 git commit -m "Add a platform-role guard for admin-only writes"
 ```
 
-### Task 9: Region write API
+### Task 8: Region write API
 
 **Files:**
 - Create: `app/modules/geo/services/region_service.py`, `tests/api/test_geo_admin_api.py`
@@ -876,8 +905,8 @@ git commit -m "Add a platform-role guard for admin-only writes"
 - Create: an Alembic revision adding `uq_regions_code`
 
 **Interfaces:**
-- Consumes: `AdminUser` from Task 8.
-- Produces: `RegionCreate(name: str, code: str)`, `RegionUpdate(name: str | None, code: str | None)`; `RegionService(session)` with `async create(payload) -> RegionRead`, `async update(region_id, payload) -> RegionRead`, `async delete(region_id) -> None`. Task 10 mirrors this shape for districts.
+- Consumes: `AdminUser` from Task 7.
+- Produces: `RegionCreate(name: str, code: str)`, `RegionUpdate(name: str | None, code: str | None)`; `RegionService(session)` with `async create(payload) -> RegionRead`, `async update(region_id, payload) -> RegionRead`, `async delete(region_id) -> None`. Task 9 mirrors this shape for districts.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1061,7 +1090,7 @@ git add -A
 git commit -m "Add admin CRUD for regions"
 ```
 
-### Task 10: District write API
+### Task 9: District write API
 
 **Files:**
 - Create: `app/modules/geo/services/district_service.py`, `app/modules/geo/api/v1/districts.py`
@@ -1069,8 +1098,8 @@ git commit -m "Add admin CRUD for regions"
 - Test: `tests/api/test_geo_admin_api.py`
 
 **Interfaces:**
-- Consumes: `AdminUser` (Task 8), `RegionService`'s conventions (Task 9).
-- Produces: `DistrictCreate(region_id, name, latitude, longitude)`, `DistrictUpdate` with all four optional; `DistrictService(session)` with `create` / `update` / `delete`. Task 11's seed migration assumes these columns and nothing more.
+- Consumes: `AdminUser` (Task 7), `RegionService`'s conventions (Task 8).
+- Produces: `DistrictCreate(region_id, name, latitude, longitude)`, `DistrictUpdate` with all four optional; `DistrictService(session)` with `create` / `update` / `delete`. Task 10's seed migration assumes these columns and nothing more.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1210,7 +1239,7 @@ Create `app/modules/geo/services/district_service.py` mirroring `RegionService`.
 
 - [ ] **Step 5: Add the router**
 
-Districts need their own module because the v1 geo router is mounted at `prefix="/v1/regions"`. Create `app/modules/geo/api/v1/districts.py` with `router = APIRouter(prefix="/v1/districts", tags=["geo"])` and the three admin routes, each shaped like Task 9's. Include it from `app/modules/geo/api/router.py`.
+Districts need their own module because the v1 geo router is mounted at `prefix="/v1/regions"`. Create `app/modules/geo/api/v1/districts.py` with `router = APIRouter(prefix="/v1/districts", tags=["geo"])` and the three admin routes, each shaped like Task 8's. Include it from `app/modules/geo/api/router.py`.
 
 The existing `GET /v1/regions/{region_id}/districts` stays where it is — it is a region-scoped read and moving it would break the mobile client.
 
@@ -1231,7 +1260,7 @@ git add -A
 git commit -m "Add admin CRUD for districts"
 ```
 
-### Task 11: Seed Uzbekistan's regions and districts
+### Task 10: Seed Uzbekistan's regions and districts
 
 **Files:**
 - Create: `app/alembic/versions/<generated>_seed_uzbekistan_geo.py`
@@ -1239,8 +1268,24 @@ git commit -m "Add admin CRUD for districts"
 - Test: `tests/test_geo_seed.py`
 
 **Interfaces:**
-- Consumes: `uq_regions_code` from Task 9.
+- Consumes: `uq_regions_code` from Task 8.
 - Produces: 14 seeded regions and every district, treated as reference data. `factories.make_district` returns a seeded district instead of creating one.
+
+**The database is not empty, and this is the trap in this task.** Measured on
+2026-08-10, the development database holds one hand-made region and one district:
+
+```
+regions:   (1, 'Toshkent shahri', 'TSH')
+districts: (1, region_id=1, 'Chilonzor', 41.275000, 69.204000)
+venues:    5 venues reference district 1
+```
+
+`TSH` is not the ISO code this task seeds (`UZ-TK`), so a plain
+`ON CONFLICT (code) DO NOTHING` sees no conflict and inserts **a second Toshkent
+shahri**. Chilonzor and its five venues stay attached to the old region while a
+duplicate Chilonzor appears under the new one. Step 4a below reconciles this before
+any insert; do not skip it, and do not solve it by deleting the existing rows —
+five venues have a foreign key into that district.
 
 - [ ] **Step 1: Build the dataset**
 
@@ -1317,7 +1362,62 @@ DISTRICTS: dict[str, list[tuple[str, str, str]]] = {
 }
 ```
 
-`upgrade()` inserts regions, then districts resolved by region code — `INSERT ... SELECT id FROM regions WHERE code = :code`, never a hardcoded id, since ids are assigned by the sequence. Coordinates go in as strings and cast to `numeric(9,6)` so no float rounding sneaks in.
+`upgrade()` opens with the reconciliation, before a single insert:
+
+```python
+def upgrade() -> None:
+    # Pre-existing hand-made rows carry ad-hoc codes (`TSH` for Toshkent shahri) and
+    # already have venues pointing at their districts. Renaming the code to ISO makes
+    # the seed's ON CONFLICT recognise them, so the rows are adopted rather than
+    # duplicated and every existing foreign key keeps resolving.
+    op.execute("UPDATE regions SET code = 'UZ-TK' WHERE code = 'TSH'")
+```
+
+Extend that list if the pre-flight below finds other non-ISO codes. Then run the
+check for anything still unmatched, and fail loudly rather than silently
+duplicating:
+
+```python
+    # A non-ISO code left here would become a duplicate region below.
+    op.execute("""
+        DO $$
+        DECLARE stray text;
+        BEGIN
+            SELECT string_agg(code, ', ') INTO stray
+            FROM regions WHERE code !~ '^UZ-[A-Z]{2}$';
+            IF stray IS NOT NULL THEN
+                RAISE EXCEPTION 'non-ISO region codes present: %; reconcile them first', stray;
+            END IF;
+        END $$;
+    """)
+```
+
+Then insert regions with `ON CONFLICT (code) DO NOTHING`, and districts resolved by
+region code — `INSERT ... SELECT id FROM regions WHERE code = :code`, never a
+hardcoded id, since ids are assigned by the sequence. Districts also need
+`ON CONFLICT DO NOTHING` on `(region_id, name)`; add that unique constraint in this
+migration if it does not exist, since it is what makes the adopted `Chilonzor` row
+survive instead of gaining a twin. Coordinates go in as strings and cast to
+`numeric(9,6)` so no float rounding sneaks in.
+
+**Run this before writing the migration** and fold whatever it prints into the
+reconciliation above — the development database is not the only one this will run
+against:
+
+```bash
+uv run python -c "
+import asyncio
+from sqlalchemy import text
+from app.core.database.db_helper import db_helper
+async def main():
+    async for s in db_helper.session_getter():
+        print('non-ISO codes:', (await s.execute(text(
+            \"SELECT id, name, code FROM regions WHERE code !~ '^UZ-[A-Z]{2}\$'\"))).all())
+        print('districts:', (await s.execute(text(
+            'SELECT d.id, d.name, r.code FROM districts d JOIN regions r ON r.id = d.region_id'))).all())
+        break
+asyncio.run(main())"
+```
 
 Make it idempotent with `ON CONFLICT (code) DO NOTHING` for regions, so a database that already holds some regions is not broken by re-running.
 
@@ -1373,7 +1473,7 @@ Unsourced districts, if any: <list or 'none'>"
 
 ## Phase 5 — Docs reorganization
 
-### Task 12: Move the root .md files into docs/
+### Task 11: Move the root .md files into docs/
 
 **Files:**
 - `git mv`: `CONVENTIONS.md`, `DECISIONS.md`, `API_PLAN.md`, `MODEL_PLAN.md`, `REPOSITORY_PLAN.md`, `SCHEMA_PLAN.md`, `SERVICE_PLAN.md`
@@ -1465,10 +1565,10 @@ the same commit so no docstring points at a path that no longer exists."
 
 ## Self-Review
 
-**Spec coverage.** Phase 1 → Task 1. Phase 2 → Tasks 2-4, including the blocking pre-flight. Phase 3 → Tasks 5-7, covering the enum, the label map, the `kafe` fold, the backfill order, and the deleted endpoint. Phase 4 → Tasks 8-11, covering the admin guard, both CRUD surfaces, the ISO code constraint, the delete guard, and the seed. Phase 5 → Task 12, covering the moves, the trim, the README, and the cross-references. The spec's "Region gets no coordinates" is honoured: no task adds a coordinate column to `regions`.
+**Spec coverage.** Phase 1 → Task 1. Phase 2 → Tasks 2-4, including the blocking pre-flight. Phase 3 → Tasks 5-6, covering the enum, the label map, the `kafe` fold, the backfill order, and the deleted endpoint. Phase 4 → Tasks 7-10, covering the admin guard, both CRUD surfaces, the ISO code constraint, the delete guard, and the seed. Phase 5 → Task 11, covering the moves, the trim, the README, and the cross-references. The spec's "Region gets no coordinates" is honoured: no task adds a coordinate column to `regions`.
 
-**Type consistency.** `VenueTypeSlug`, `VENUE_TYPE_LABELS`, `VENUE_TYPE_SORT_ORDER` are defined in Task 5 and used under those names in Tasks 6 and 7. `AdminUser` and `PlatformRoleRequired` are defined in Task 8 and used in Tasks 9 and 10. `BearerCredentials` is defined in Task 1 and used nowhere later, which is correct — it is internal to `dependencies.py`. `RegionCreate`/`RegionUpdate` and `DistrictCreate`/`DistrictUpdate` are each defined before use.
+**Type consistency.** `VenueTypeSlug`, `VENUE_TYPE_LABELS`, `VENUE_TYPE_SORT_ORDER` are defined in Task 5 and used under those names in Task 6. `AdminUser` and `PlatformRoleRequired` are defined in Task 7 and used in Tasks 8 and 9. `BearerCredentials` is defined in Task 1 and used nowhere later, which is correct — it is internal to `dependencies.py`. `RegionCreate`/`RegionUpdate` and `DistrictCreate`/`DistrictUpdate` are each defined before use.
 
-**Two things left open on purpose.** Task 2 stops for a user decision if any account would be stranded. Task 11 reports any district whose coordinates could not be sourced rather than inventing them. Both are stated in the spec's Risks section; neither is a placeholder.
+**Two things left open on purpose.** Task 2 stops for a user decision if any account would be stranded. Task 10 reports any district whose coordinates could not be sourced rather than inventing them. Both are stated in the spec's Risks section; neither is a placeholder.
 
 **One judgment call to flag at execution.** Task 6 Step 4 says to match the codebase's existing `Enum(...)` convention rather than blindly taking `native_enum=False`. Grep first, follow what is there.
