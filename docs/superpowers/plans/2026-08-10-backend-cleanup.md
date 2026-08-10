@@ -13,7 +13,8 @@
 ## Global Constraints
 
 - Python `>=3.14`. `except A, B:` without parentheses is valid here (PEP 758) — do not "fix" it.
-- Run everything through uv: `uv run pytest`, `uv run ruff check .`, `uv run ruff format --check .`, `uv run mypy app`.
+- Run everything through uv: `uv run pytest` (see the override below), `uv run ruff check .`, `uv run ruff format --check .`, `uv run mypy app`.
+- **Always run the suite as `APP_CONFIG__SECURITY__AUTH_MODE=enforced uv run pytest`.** The local `.env` sets `AUTH_MODE=disabled` with `DEV_USER_ID=3`; that user does not exist in the truncated test database, so `_dev_user` raises `AuthConfigurationError` and 34 tests fail for a reason that has nothing to do with your change. With the override: 122 passed, 0 failed, as of commit `e3895a2`. **That is the baseline — a task is green only at 122+ passing and 0 failing.** If you see exactly 34 failures naming `SECURITY__DEV_USER_ID=3 does not exist`, you forgot the override. Never "fix" those tests and never edit `.env`.
 - ruff `line-length = 100`, lint set `E, F, I, N, UP, B, SIM, RUF`. mypy `strict = true`, excluding `app/alembic/versions/`.
 - Tests run against a real PostgreSQL with migrations applied. No mocks for database behaviour, no SQLite. `TEST_DATABASE_URL`, else the configured database with `_test` appended.
 - **Nothing in `app/core/dependencies.py` or in any service may raise `HTTPException`.** Failures are `DomainError` subclasses; `app/core/handlers.py` owns the status code.
@@ -98,7 +99,7 @@ async def test_protected_route_references_the_scheme_not_a_header(client: AsyncC
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `uv run pytest tests/api/test_contract.py -k bearer_security_scheme -v`
+Run: `APP_CONFIG__SECURITY__AUTH_MODE=enforced uv run pytest tests/api/test_contract.py -k bearer_security_scheme -v`
 Expected: FAIL — `KeyError: 'securitySchemes'`, since no security scheme is declared yet.
 
 - [ ] **Step 3: Add the scheme and replace the header params**
@@ -176,12 +177,12 @@ Leave `Header` imported — `get_language_id` still uses it for `accept_language
 
 - [ ] **Step 4: Run the new tests**
 
-Run: `uv run pytest tests/api/test_contract.py -v`
+Run: `APP_CONFIG__SECURITY__AUTH_MODE=enforced uv run pytest tests/api/test_contract.py -v`
 Expected: PASS, all tests in the file.
 
 - [ ] **Step 5: Run the full suite — this touches every authenticated route**
 
-Run: `uv run pytest`
+Run: `APP_CONFIG__SECURITY__AUTH_MODE=enforced uv run pytest`
 Expected: PASS. `tests/api/test_auth_mode_api.py` is the one that proves `AUTH_MODE=disabled` still resolves a user with no credential present.
 
 - [ ] **Step 6: Lint and type-check**
@@ -283,7 +284,7 @@ async def test_openapi_has_no_google_operation(client: AsyncClient) -> None:
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `uv run pytest tests/api/test_auth_api.py -k google -v`
+Run: `APP_CONFIG__SECURITY__AUTH_MODE=enforced uv run pytest tests/api/test_auth_api.py -k google -v`
 Expected: FAIL — the route still answers (422 for the bad token, not 404).
 
 - [ ] **Step 3: Delete the route and the service methods**
@@ -311,7 +312,7 @@ Expected: hits **only** under `app/alembic/versions/`. Those are immutable histo
 
 - [ ] **Step 6: Run the suite**
 
-Run: `uv run pytest`
+Run: `APP_CONFIG__SECURITY__AUTH_MODE=enforced uv run pytest`
 Expected: PASS. Delete any test that only exercised the removed Google path; keep every phone-auth test untouched.
 
 - [ ] **Step 7: Lint and type-check**
@@ -355,7 +356,7 @@ async def test_auth_identities_table_is_gone(session: AsyncSession) -> None:
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `uv run pytest tests/test_models_registry.py -k auth_identities -v`
+Run: `APP_CONFIG__SECURITY__AUTH_MODE=enforced uv run pytest tests/test_models_registry.py -k auth_identities -v`
 Expected: FAIL — the table is still present in the migrated test database.
 
 - [ ] **Step 3: Remove the model and the enum**
@@ -385,7 +386,7 @@ Expected: all three succeed. A `downgrade` that errors is a broken migration eve
 
 - [ ] **Step 6: Run the suite**
 
-Run: `uv run pytest`
+Run: `APP_CONFIG__SECURITY__AUTH_MODE=enforced uv run pytest`
 Expected: PASS.
 
 - [ ] **Step 7: Lint and type-check**
@@ -450,7 +451,7 @@ def test_restoran_sorts_before_toyxona() -> None:
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `uv run pytest tests/test_venue_type_enum.py -v`
+Run: `APP_CONFIG__SECURITY__AUTH_MODE=enforced uv run pytest tests/test_venue_type_enum.py -v`
 Expected: FAIL — `ModuleNotFoundError: app.modules.venues.enums`.
 
 - [ ] **Step 3: Write the enum**
@@ -487,7 +488,7 @@ VENUE_TYPE_SORT_ORDER: dict[VenueTypeSlug, int] = {
 
 - [ ] **Step 4: Run the test**
 
-Run: `uv run pytest tests/test_venue_type_enum.py -v`
+Run: `APP_CONFIG__SECURITY__AUTH_MODE=enforced uv run pytest tests/test_venue_type_enum.py -v`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
@@ -562,7 +563,7 @@ async def test_venue_carries_its_type_as_a_column(session: AsyncSession) -> None
 
 - [ ] **Step 3: Run to verify it fails**
 
-Run: `uv run pytest tests/test_models_registry.py -k venue_type -v`
+Run: `APP_CONFIG__SECURITY__AUTH_MODE=enforced uv run pytest tests/test_models_registry.py -k venue_type -v`
 Expected: FAIL — both tables are present and the column is absent.
 
 - [ ] **Step 4: Change the models**
@@ -668,7 +669,7 @@ Expected: all three succeed.
 
 - [ ] **Step 7: Run the model tests**
 
-Run: `uv run pytest tests/test_models_registry.py -v`
+Run: `APP_CONFIG__SECURITY__AUTH_MODE=enforced uv run pytest tests/test_models_registry.py -v`
 Expected: PASS. The rest of the suite still fails here — Task 7 fixes the readers. Do not "repair" those failures inside this task.
 
 - [ ] **Step 8: Commit**
@@ -722,7 +723,7 @@ Confirm the real search path and its response envelope from the existing tests i
 
 - [ ] **Step 2: Run to verify they fail**
 
-Run: `uv run pytest tests/api/test_venue_search_api.py -v`
+Run: `APP_CONFIG__SECURITY__AUTH_MODE=enforced uv run pytest tests/api/test_venue_search_api.py -v`
 Expected: FAIL.
 
 - [ ] **Step 3: Update the factories first**
@@ -745,7 +746,7 @@ In `tests/repositories/factories.py` delete `get_venue_type`, and give `make_ven
 
 - [ ] **Step 6: Run the full suite**
 
-Run: `uv run pytest`
+Run: `APP_CONFIG__SECURITY__AUTH_MODE=enforced uv run pytest`
 Expected: PASS. Every venue-type reference in tests should now go through the enum.
 
 - [ ] **Step 7: Confirm nothing references the old shape**
@@ -805,7 +806,7 @@ Check `tests/repositories/factories.py` for the real user factory name and wheth
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `uv run pytest tests/api/test_permissions_api.py -k platform_role -v`
+Run: `APP_CONFIG__SECURITY__AUTH_MODE=enforced uv run pytest tests/api/test_permissions_api.py -k platform_role -v`
 Expected: FAIL — `ImportError: cannot import name 'PlatformRoleRequired'`.
 
 - [ ] **Step 3: Write the guard**
@@ -857,7 +858,7 @@ The `auth_disabled()` bypass matches every other guard in this file; without it 
 
 - [ ] **Step 4: Run the test**
 
-Run: `uv run pytest tests/api/test_permissions_api.py -v`
+Run: `APP_CONFIG__SECURITY__AUTH_MODE=enforced uv run pytest tests/api/test_permissions_api.py -v`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
@@ -939,7 +940,7 @@ Add `admin_headers` and `customer_headers` fixtures to `tests/api/conftest.py`: 
 
 - [ ] **Step 2: Run to verify they fail**
 
-Run: `uv run pytest tests/api/test_geo_admin_api.py -v`
+Run: `APP_CONFIG__SECURITY__AUTH_MODE=enforced uv run pytest tests/api/test_geo_admin_api.py -v`
 Expected: FAIL — 405 on POST, since only GET routes exist.
 
 - [ ] **Step 3: Add the unique constraint migration**
@@ -1045,7 +1046,7 @@ async def create_region(
 
 - [ ] **Step 7: Run the tests**
 
-Run: `uv run pytest tests/api/test_geo_admin_api.py -v && uv run pytest`
+Run: `APP_CONFIG__SECURITY__AUTH_MODE=enforced uv run pytest tests/api/test_geo_admin_api.py -v && APP_CONFIG__SECURITY__AUTH_MODE=enforced uv run pytest`
 Expected: PASS.
 
 - [ ] **Step 8: Lint and type-check**
@@ -1159,7 +1160,7 @@ Add a `make_region` factory if `factories.py` has none — `make_district` curre
 
 - [ ] **Step 2: Run to verify they fail**
 
-Run: `uv run pytest tests/api/test_geo_admin_api.py -k district -v`
+Run: `APP_CONFIG__SECURITY__AUTH_MODE=enforced uv run pytest tests/api/test_geo_admin_api.py -k district -v`
 Expected: FAIL — 404, no `/api/v1/districts` router exists.
 
 - [ ] **Step 3: Write the schemas with a coordinate envelope**
@@ -1215,7 +1216,7 @@ The existing `GET /v1/regions/{region_id}/districts` stays where it is — it is
 
 - [ ] **Step 6: Run the tests**
 
-Run: `uv run pytest tests/api/test_geo_admin_api.py -v && uv run pytest`
+Run: `APP_CONFIG__SECURITY__AUTH_MODE=enforced uv run pytest tests/api/test_geo_admin_api.py -v && APP_CONFIG__SECURITY__AUTH_MODE=enforced uv run pytest`
 Expected: PASS.
 
 - [ ] **Step 7: Lint and type-check**
@@ -1289,7 +1290,7 @@ async def test_region_codes_are_iso_3166_2(session: AsyncSession) -> None:
 
 - [ ] **Step 3: Run to verify it fails**
 
-Run: `uv run pytest tests/test_geo_seed.py -v`
+Run: `APP_CONFIG__SECURITY__AUTH_MODE=enforced uv run pytest tests/test_geo_seed.py -v`
 Expected: FAIL — `regions` is empty, so the count is 0.
 
 - [ ] **Step 4: Write the seed migration**
@@ -1349,7 +1350,7 @@ async def make_district(session: AsyncSession) -> District:
 
 - [ ] **Step 7: Run the full suite**
 
-Run: `uv run pytest`
+Run: `APP_CONFIG__SECURITY__AUTH_MODE=enforced uv run pytest`
 Expected: PASS. Watch specifically for tests that assumed a per-test district — they now share one seeded row, so any test asserting on a district count needs updating.
 
 - [ ] **Step 8: Lint and type-check**
@@ -1445,7 +1446,7 @@ Expected: no hits outside `docs/superpowers/`, which quotes the old names histor
 
 ```bash
 ls *.md                    # expect: README.md (and make_plan.md if kept)
-uv run pytest              # expect: PASS — nothing here touches code
+APP_CONFIG__SECURITY__AUTH_MODE=enforced uv run pytest   # expect: PASS — nothing here touches code
 uv run ruff check .        # expect: clean; docstring edits can break line-length
 ```
 
