@@ -1,0 +1,98 @@
+@import "tailwindcss";
+
+@theme {
+  --color-primary: #FF6B00;
+  --color-primary-hover: #E05E00;
+  --color-brand-dark: #333333;
+  --color-brand-dark-surface: #121212;
+  --color-brand-dark-card: #1E1E1E;
+  --color-brand-dark-border: #2A2A2A;
+  
+  --color-brand-light: #F8F9FA;
+  --color-brand-light-surface: #FFFFFF;
+  --color-brand-light-card: #FFFFFF;
+  --color-brand-light-border: #E5E7EB;
+}
+
+:root {
+  --background: #FFFFFF;
+  --foreground: #171717;
+}
+
+.dark {
+  --background: #333333;
+  --foreground: #F3F4F6;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  transition: background-color 0.3s ease, color 0.3s ease;
+  font-family: var(--font-plus-jakarta-sans), system-ui, -apple-system, sans-serif;
+}
+
+/* Premium micro-interactions and custom utility styles */
+.glass-effect {
+  backdrop-filter: blur(12px);
+  background-color: rgba(255, 255, 255, 0.7);
+}
+
+.dark .glass-effect {
+  background-color: rgba(18, 18, 18, 0.7);
+}
+
+/* Custom transitions and scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 107, 0, 0.2);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 107, 0, 0.4);
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-10px); }
+}
+
+.animate-float {
+  animation: float 6s ease-in-out infinite;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes scaleUp {
+  from { transform: scale(0.95); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.2s ease-out forwards;
+}
+
+.animate-scale-up {
+  animation: scaleUp 0.25s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+@keyframes laser {
+  0%, 100% { top: 0%; opacity: 0.3; }
+  50% { top: 100%; opacity: 1; }
+}
+
+.animate-laser {
+  animation: laser 2s ease-in-out infinite;
+}
+
+.filter-primary {
+  filter: invert(53%) sepia(85%) saturate(3574%) hue-rotate(346deg) brightness(102%) contrast(101%);
+}

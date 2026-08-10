@@ -1,165 +1,101 @@
-# baz
+# bazmly
 
-A FastAPI backend: async SQLAlchemy 2.x, Alembic, PostgreSQL, managed with uv.
+Bron qilish platformasi — a booking platform for Uzbek restaurants and wedding
+halls. Two halves, one repository.
 
-Read [CONVENTIONS.md](CONVENTIONS.md) before writing code — the module layout and
-the one-model-per-file / no-base-repository rules are not optional.
+```
+backend/    FastAPI + async SQLAlchemy + PostGIS. 109 endpoints under /api/v1.
+frontend/   Next.js 16 App Router, Tailwind v4. Uzbek UI, mobile-first.
+```
 
-## Stack
-
-| Concern       | Choice                                        |
-| ------------- | --------------------------------------------- |
-| Runtime       | Python 3.14                                   |
-| Web           | FastAPI + uvicorn                             |
-| ORM           | SQLAlchemy 2.x async, `Mapped`/`mapped_column` |
-| Migrations    | Alembic (async `env.py`)                      |
-| Settings      | Pydantic v2 + pydantic-settings               |
-| Database      | PostgreSQL 17 + PostGIS + asyncpg             |
-| Cache / locks | Redis                                         |
-| Packaging     | uv                                            |
-| Lint / format | ruff                                          |
-| Types         | mypy `--strict`                               |
-| Tests         | pytest + pytest-asyncio                       |
+Each half has its own README, its own toolchain and its own commands. Nothing in
+`frontend/` imports from `backend/`; they meet over HTTP and nowhere else.
 
 ## Quick start — Docker
 
 ```sh
-cp .env.template .env      # then edit if you like
+cp .env.template .env              # host ports; see "Configuration" below
+cp backend/.env.template backend/.env
 docker compose up -d
-curl localhost:8000/api/health     # {"status": "ok"}
+curl localhost:8000/api/health     # {"status": "ok", ...}
 ```
 
-The backend's entrypoint runs `alembic upgrade head` before uvicorn starts, so
-`docker compose up` on an empty volume produces a fully migrated database.
-
-If 5432 or 8000 are already taken on your machine, override the published host
-ports (container ports never change):
-
-```sh
-POSTGRES_PORT=5442 BACKEND_PORT=8010 docker compose up -d
-```
+`backend/docker/entrypoint.sh` runs `alembic upgrade head` before uvicorn starts,
+so an empty volume comes up as a fully migrated database with every reference
+list already seeded — languages, staff roles, permissions, the service
+catalogue, amenities, and all 14 regions and 209 districts of Uzbekistan.
 
 ## Quick start — local
 
+Two terminals. Backend commands run from `backend/`, frontend commands from
+`frontend/`.
+
 ```sh
+# backend
+cd backend
 uv sync
-docker compose up -d postgres          # or point .env at your own Postgres
+docker compose -f ../docker-compose.yml up -d postgres redis
 uv run alembic upgrade head
-uv run python -m scripts.seed_demo     # optional: demo venues, menus, bookings
+uv run python -m scripts.seed_demo      # optional: demo venues, menus, bookings
 uv run uvicorn app.main:app --reload
 ```
 
-## Seed data
-
-Two layers, and they are not interchangeable.
-
-**Reference data ships in migrations**, so `alembic upgrade head` alone yields a
-database the app can run on: the three interface languages (`uz`, `en`, `ru`),
-staff roles, permissions, the service catalogue, amenities, and the whole
-geography — 14 regions and 209 districts of Uzbekistan, keyed by ISO 3166-2:UZ
-codes, with a centre coordinate per district. `venues.district_id` is NOT NULL,
-so onboarding is impossible without the last of those.
-
-**Demo data is a script**, because none of it belongs in staging or production:
-
 ```sh
-uv run python -m scripts.seed_demo
+# frontend
+cd frontend
+npm install
+cp .env.example .env.local              # points at the backend's published port
+npm run dev                             # http://localhost:3000
 ```
 
-It writes three chains, six branches (four restaurants and two to'yxona), their
-zones, tables, working hours, photos, amenities, guest tiers, menus, services,
-staff, bookings, open checks, reviews and favourites, plus 29 accounts — one
-admin, one moderator, three owners, six customers and eighteen employees. Every
-account signs in with the phone number printed at the end and the password
-`demo1234`.
+## How the two connect
 
-Each run truncates the demo-owned tables first, so it is idempotent. It never
-touches `regions` or `districts`, and it refuses to run unless
-`APP_CONFIG__ENV=local`.
+The browser calls the API directly. There is no proxy and no shared code — the
+contract is the OpenAPI schema at `/api/openapi.json`, from which the frontend
+generates its types (`npm run gen:api` in `frontend/`).
+
+That makes two settings load-bearing, and they have to agree:
+
+| Setting | Where | Meaning |
+| --- | --- | --- |
+| `NEXT_PUBLIC_API_URL` | `frontend/.env.local` | where the browser sends requests |
+| `APP_CONFIG__CORS__ORIGINS` | `backend/.env` | which origin the API answers |
+
+If the frontend loads but every request fails in the browser while `curl` works,
+these two have drifted apart. `curl` is not subject to CORS.
+
+## Configuration
+
+Three env files, because three different things read them and only one of them
+resolves paths the way you would expect.
+
+| File | Read by | Holds |
+| --- | --- | --- |
+| `.env` | docker compose, for `${VAR}` substitution | host ports only |
+| `backend/.env` | pydantic-settings, and compose as `env_file` | `APP_CONFIG__*` |
+| `frontend/.env.local` | Next.js at build and dev time | `NEXT_PUBLIC_*` |
+
+Compose substitutes `${POSTGRES_PORT}` and friends from the `.env` sitting next
+to `docker-compose.yml` and from nowhere else — not from `env_file`, not from
+`backend/.env`. Without the root `.env`, the ports silently fall back to the
+defaults written into `docker-compose.yml`.
+
+Container ports never change; the published host ports do. Override them when
+something else on the machine already holds one:
+
+```sh
+# .env
+POSTGRES_PORT=5442
+BACKEND_PORT=8010
+FRONTEND_PORT=3000
+```
+
+Each `*.template` / `*.example` file is committed and holds safe defaults. The
+real files are git-ignored.
 
 ## Checks
 
 ```sh
-uv run ruff check .
-uv run ruff format --check .
-uv run mypy app
-uv run pytest
+cd backend  && uv run ruff check . && uv run mypy app && uv run pytest
+cd frontend && npm run lint && npm run typecheck && npm run build
 ```
-
-## Configuration
-
-Settings are nested and namespaced. Every variable is `APP_CONFIG__` prefixed and
-nested with a double underscore:
-
-```
-APP_CONFIG__DATABASE__URL=postgresql+asyncpg://postgres:postgres@localhost:5432/baz
-APP_CONFIG__RUN__PORT=8000
-APP_CONFIG__LOGGING__LEVEL=INFO
-APP_CONFIG__ENV=local
-```
-
-Signing in needs no third party. A customer sends a phone number, then a name and
-an optional password, and the account exists — there is no verification code, no
-SMS gateway, no email and no external dependency.
-
-`APP_CONFIG__SECURITY__AUTH_MODE` is coupled to `ENV`. Setting it to
-`disabled` — together with `APP_CONFIG__SECURITY__DEV_USER_ID`, a real `users.id`
-— turns off authentication *and* authorization at every layer, so the API can be
-driven from a browser before a login flow exists. It is refused outside
-`ENV=local`: the process will not start. The default is `enforced`.
-
-[`.env.template`](.env.template) is committed and holds safe defaults; `.env` is
-git-ignored and overrides it. Both are loaded, in that order.
-
-## Layout
-
-```
-app/
-├── main.py                 # app wiring, middleware, lifespan
-├── core/                   # config, routing, errors, pagination, logging, db
-│   ├── database/           # Base, mixins, DatabaseHelper
-│   └── middleware/         # request id, access logging
-├── modules/                # feature modules — auth, organization_structure
-└── alembic/                # migration environment
-```
-
-`course`, `quiz` and `psychology` come later and must use the identical module
-skeleton — see [CONVENTIONS.md](CONVENTIONS.md).
-
-## Migrations
-
-```sh
-uv run alembic revision --autogenerate -m "add users"
-uv run alembic upgrade head
-uv run alembic downgrade -1
-```
-
-New models must be imported in [`app/core/models_registry.py`](app/core/models_registry.py)
-or autogenerate will not see them.
-
-The database URL comes from `settings.database.url`, never from `alembic.ini`.
-
-## API
-
-| Route                  | Purpose                                |
-| ---------------------- | -------------------------------------- |
-| `GET /api/health`      | Liveness. Does not touch the database. |
-| `/api/v1/<module>/...` | Versioned module endpoints.            |
-| `/api/v2/<module>/...` | Reserved; no endpoints yet.            |
-| `/api/docs`            | Swagger UI.                            |
-| `/api/openapi.json`    | OpenAPI schema.                        |
-
-The docs and schema sit under the API prefix so a reverse proxy can route one path
-to this service.
-
-Errors always come back in one envelope:
-
-```json
-{"code": "not_found", "message": "...", "details": {}, "request_id": "..."}
-```
-
-`message` is Uzbek and is for display only. Branch on `code` — it is English and
-stable.
-
-Every response carries an `X-Request-ID` header, echoed from the request when
-supplied and generated otherwise.

@@ -1,1 +1,0 @@
-"""The `bookings` module."""

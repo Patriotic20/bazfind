@@ -37,15 +37,17 @@ services:
 
   backend:
     build:
-      context: .
+      context: ./backend
       dockerfile: Dockerfile
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+    # Application settings. The host ports this file substitutes come from the
+    # root `.env` instead, which compose reads on its own.
     env_file:
-      - .env
+      - ./backend/.env
     environment:
       # Inside the compose network the database is reachable as `postgres`,
       # which overrides the localhost URL in .env.
@@ -57,6 +59,21 @@ services:
       - "${BACKEND_PORT:-8000}:8000"
     # The entrypoint runs `alembic upgrade head` before handing off to this command.
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    healthcheck:
+      # Python rather than curl: the slim base image has no HTTP client, and the
+      # frontend's `depends_on` is only worth anything against a real readiness
+      # signal — migrations run before uvicorn, so "started" is not "serving".
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health').read()",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
 
 volumes:
   postgres_data:
