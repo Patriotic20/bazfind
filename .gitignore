@@ -10,7 +10,16 @@ wheels/
 .venv
 
 # Local environment overrides — .env.template IS committed, .env is not.
+# There are two: this one holds the host ports docker compose substitutes,
+# `backend/.env` holds the application settings.
 .env
+
+# Node — `frontend/.gitignore` covers the frontend itself; these catch a stray
+# install anywhere else in the tree.
+node_modules/
+.next/
+out/
+npm-debug.log*
 
 # Tooling caches
 .mypy_cache/
