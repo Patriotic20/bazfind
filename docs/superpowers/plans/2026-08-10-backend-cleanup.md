@@ -292,9 +292,7 @@ Append to `tests/api/test_auth_api.py`:
 ```python
 async def test_google_login_route_is_gone(client: AsyncClient) -> None:
     """Google auth was removed; the route must not linger as a 500 or a stub."""
-    response = await client.post(
-        "/api/v1/auth/social/google", json={"id_token": "anything"}
-    )
+    response = await client.post("/api/v1/auth/social/google", json={"id_token": "anything"})
     assert response.status_code == 404
 
 
@@ -370,9 +368,7 @@ Append to `tests/test_models_registry.py`:
 ```python
 async def test_auth_identities_table_is_gone(session: AsyncSession) -> None:
     """The last provider left with Google, so the table has nothing to hold."""
-    exists = await session.scalar(
-        text("SELECT to_regclass('public.auth_identities') IS NOT NULL")
-    )
+    exists = await session.scalar(text("SELECT to_regclass('public.auth_identities') IS NOT NULL"))
     assert exists is False
 ```
 
@@ -466,8 +462,9 @@ def test_every_member_has_an_uzbek_label_and_an_order() -> None:
 def test_restoran_sorts_before_toyxona() -> None:
     """The migration's backfill resolves a multi-typed venue by this order, so a
     change here silently changes what those venues become."""
-    assert VENUE_TYPE_SORT_ORDER[VenueTypeSlug.RESTORAN] < (
-        VENUE_TYPE_SORT_ORDER[VenueTypeSlug.TOYXONA]
+    assert (
+        VENUE_TYPE_SORT_ORDER[VenueTypeSlug.RESTORAN]
+        < (VENUE_TYPE_SORT_ORDER[VenueTypeSlug.TOYXONA])
     )
 ```
 
@@ -579,9 +576,7 @@ Append to `tests/test_models_registry.py`:
 async def test_venue_type_tables_are_gone(session: AsyncSession) -> None:
     """Two values do not need two tables."""
     for table in ("venue_types", "venue_venue_types"):
-        exists = await session.scalar(
-            text(f"SELECT to_regclass('public.{table}') IS NOT NULL")
-        )
+        exists = await session.scalar(text(f"SELECT to_regclass('public.{table}') IS NOT NULL"))
         assert exists is False, f"{table} still exists"
 
 
@@ -662,7 +657,9 @@ def upgrade() -> None:
     """)
 
     # 3. `kafe` is not a value any more, and neither is a venue with no type row.
-    op.execute("UPDATE venues SET venue_type = 'restoran' WHERE venue_type IS DISTINCT FROM 'toyxona'")
+    op.execute(
+        "UPDATE venues SET venue_type = 'restoran' WHERE venue_type IS DISTINCT FROM 'toyxona'"
+    )
     op.execute(
         "UPDATE venue_groups SET primary_venue_type = 'restoran' "
         "WHERE primary_venue_type IS DISTINCT FROM 'toyxona'"
@@ -944,7 +941,9 @@ async def test_duplicate_region_code_is_rejected(
     client: AsyncClient, admin_headers: dict[str, str]
 ) -> None:
     body = {"name": "Namangan", "code": "UZ-NG"}
-    assert (await client.post("/api/v1/regions", json=body, headers=admin_headers)).status_code == 201
+    assert (
+        await client.post("/api/v1/regions", json=body, headers=admin_headers)
+    ).status_code == 201
 
     second = await client.post(
         "/api/v1/regions", json={"name": "Boshqa", "code": "UZ-NG"}, headers=admin_headers
@@ -958,9 +957,7 @@ async def test_deleting_a_region_with_districts_is_refused(
     """A raw FK violation would surface as a 500; this must be a validation error."""
     district = await make_district(session)
 
-    response = await client.delete(
-        f"/api/v1/regions/{district.region_id}", headers=admin_headers
-    )
+    response = await client.delete(f"/api/v1/regions/{district.region_id}", headers=admin_headers)
 
     assert response.status_code == 422
 ```
@@ -1026,9 +1023,7 @@ class RegionService:
 
     async def create(self, payload: RegionCreate) -> RegionRead:
         if await self.regions.get_by_code(payload.code) is not None:
-            raise ValidationFailedError(
-                "Bu kod allaqachon band", details={"code": payload.code}
-            )
+            raise ValidationFailedError("Bu kod allaqachon band", details={"code": payload.code})
         region = await self.regions.create(name=payload.name, code=payload.code)
         await self.session.commit()
         return RegionRead.model_validate(region)
@@ -1065,9 +1060,7 @@ In `app/modules/geo/api/v1/router.py`, alongside the two existing GETs:
     summary="Viloyat qo'shish",
     description="Faqat administrator uchun.",
 )
-async def create_region(
-    payload: RegionCreate, session: SessionDep, _: AdminUser
-) -> RegionRead:
+async def create_region(payload: RegionCreate, session: SessionDep, _: AdminUser) -> RegionRead:
     return await RegionService(session).create(payload)
 ```
 
@@ -1167,9 +1160,7 @@ async def test_deleting_a_district_used_by_a_venue_is_refused(
 ) -> None:
     venue = await make_venue(session)
 
-    response = await client.delete(
-        f"/api/v1/districts/{venue.district_id}", headers=admin_headers
-    )
+    response = await client.delete(f"/api/v1/districts/{venue.district_id}", headers=admin_headers)
 
     assert response.status_code == 422
 
@@ -1179,9 +1170,7 @@ async def test_customer_cannot_delete_a_district(
 ) -> None:
     district = await make_district(session)
 
-    response = await client.delete(
-        f"/api/v1/districts/{district.id}", headers=customer_headers
-    )
+    response = await client.delete(f"/api/v1/districts/{district.id}", headers=customer_headers)
     assert response.status_code == 403
 ```
 
@@ -1309,27 +1298,41 @@ async def test_all_regions_are_seeded(session: AsyncSession) -> None:
 
 
 async def test_every_region_has_districts(session: AsyncSession) -> None:
-    orphans = (await session.execute(text("""
+    orphans = (
+        (
+            await session.execute(
+                text("""
         SELECT r.name FROM regions r
         LEFT JOIN districts d ON d.region_id = r.id
         WHERE d.id IS NULL
-    """))).scalars().all()
+    """)
+            )
+        )
+        .scalars()
+        .all()
+    )
     assert not orphans, f"regions with no districts: {orphans}"
 
 
 async def test_every_district_sits_inside_uzbekistan(session: AsyncSession) -> None:
     """Catches a transposed or mistyped coordinate in the seed data itself."""
-    outside = (await session.execute(text("""
+    outside = (
+        await session.execute(
+            text("""
         SELECT name, latitude, longitude FROM districts
         WHERE latitude NOT BETWEEN 36 AND 46 OR longitude NOT BETWEEN 55 AND 74
-    """))).all()
+    """)
+        )
+    ).all()
     assert not outside, f"districts outside the country: {outside}"
 
 
 async def test_region_codes_are_iso_3166_2(session: AsyncSession) -> None:
-    bad = (await session.execute(
-        text("SELECT code FROM regions WHERE code !~ '^UZ-[A-Z]{2}$'")
-    )).scalars().all()
+    bad = (
+        (await session.execute(text("SELECT code FROM regions WHERE code !~ '^UZ-[A-Z]{2}$'")))
+        .scalars()
+        .all()
+    )
     assert not bad, f"non-ISO region codes: {bad}"
 ```
 
