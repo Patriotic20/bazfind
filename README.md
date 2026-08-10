@@ -16,7 +16,6 @@ the one-model-per-file / no-base-repository rules are not optional.
 | Settings      | Pydantic v2 + pydantic-settings               |
 | Database      | PostgreSQL 17 + PostGIS + asyncpg             |
 | Cache / locks | Redis                                         |
-| Social login  | Google Sign-In, `id_token` verified against Google's JWKS |
 | Packaging     | uv                                            |
 | Lint / format | ruff                                          |
 | Types         | mypy `--strict`                               |
@@ -72,9 +71,7 @@ APP_CONFIG__ENV=local
 
 Signing in needs no third party. A customer sends a phone number, then a name and
 an optional password, and the account exists — there is no verification code, no
-SMS gateway and no email. `POST /api/v1/auth/social/google` is the one external
-dependency, and it is optional: leave `APP_CONFIG__GOOGLE__CLIENT_IDS` empty and
-that endpoint refuses while everything else works.
+SMS gateway, no email and no external dependency.
 
 `APP_CONFIG__SECURITY__AUTH_MODE` is coupled to `ENV`. Setting it to
 `disabled` — together with `APP_CONFIG__SECURITY__DEV_USER_ID`, a real `users.id`
