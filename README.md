@@ -14,7 +14,9 @@ the one-model-per-file / no-base-repository rules are not optional.
 | ORM           | SQLAlchemy 2.x async, `Mapped`/`mapped_column` |
 | Migrations    | Alembic (async `env.py`)                      |
 | Settings      | Pydantic v2 + pydantic-settings               |
-| Database      | PostgreSQL 17 + asyncpg                       |
+| Database      | PostgreSQL 17 + PostGIS + asyncpg             |
+| Cache / locks | Redis                                         |
+| Social login  | Google Sign-In, `id_token` verified against Google's JWKS |
 | Packaging     | uv                                            |
 | Lint / format | ruff                                          |
 | Types         | mypy `--strict`                               |
@@ -65,7 +67,20 @@ nested with a double underscore:
 APP_CONFIG__DATABASE__URL=postgresql+asyncpg://postgres:postgres@localhost:5432/baz
 APP_CONFIG__RUN__PORT=8000
 APP_CONFIG__LOGGING__LEVEL=INFO
+APP_CONFIG__ENV=local
 ```
+
+Signing in needs no third party. A customer sends a phone number, then a name and
+an optional password, and the account exists — there is no verification code, no
+SMS gateway and no email. `POST /api/v1/auth/social/google` is the one external
+dependency, and it is optional: leave `APP_CONFIG__GOOGLE__CLIENT_IDS` empty and
+that endpoint refuses while everything else works.
+
+`APP_CONFIG__SECURITY__AUTH_MODE` is coupled to `ENV`. Setting it to
+`disabled` — together with `APP_CONFIG__SECURITY__DEV_USER_ID`, a real `users.id`
+— turns off authentication *and* authorization at every layer, so the API can be
+driven from a browser before a login flow exists. It is refused outside
+`ENV=local`: the process will not start. The default is `enforced`.
 
 [`.env.template`](.env.template) is committed and holds safe defaults; `.env` is
 git-ignored and overrides it. Both are loaded, in that order.
@@ -105,14 +120,20 @@ The database URL comes from `settings.database.url`, never from `alembic.ini`.
 | `GET /api/health`      | Liveness. Does not touch the database. |
 | `/api/v1/<module>/...` | Versioned module endpoints.            |
 | `/api/v2/<module>/...` | Reserved; no endpoints yet.            |
-| `/docs`                | Swagger UI.                            |
-| `/openapi.json`        | OpenAPI schema.                        |
+| `/api/docs`            | Swagger UI.                            |
+| `/api/openapi.json`    | OpenAPI schema.                        |
+
+The docs and schema sit under the API prefix so a reverse proxy can route one path
+to this service.
 
 Errors always come back in one envelope:
 
 ```json
-{"error": {"code": "not_found", "message": "...", "details": {}, "request_id": "..."}}
+{"code": "not_found", "message": "...", "details": {}, "request_id": "..."}
 ```
+
+`message` is Uzbek and is for display only. Branch on `code` — it is English and
+stable.
 
 Every response carries an `X-Request-ID` header, echoed from the request when
 supplied and generated otherwise.

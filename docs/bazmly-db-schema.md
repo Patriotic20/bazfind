@@ -18,15 +18,13 @@ Reference document for the backend. Derived from the Figma screens (customer app
 6. [menu](#6-menu)
 7. [catering](#7-catering)
 8. [bookings](#8-bookings)
-9. [payments](#9-payments)
-10. [subscriptions](#10-subscriptions)
-11. [promotions](#11-promotions)
-12. [reviews](#12-reviews)
-13. [engagement](#13-engagement)
-14. [Design decisions](#design-decisions)
-15. [Constraints and indexes](#constraints-and-indexes)
-16. [Migration order](#migration-order)
-17. [Open questions](#open-questions)
+9. [subscriptions](#9-subscriptions)
+10. [reviews](#10-reviews)
+11. [engagement](#11-engagement)
+12. [Design decisions](#design-decisions)
+13. [Constraints and indexes](#constraints-and-indexes)
+14. [Migration order](#migration-order)
+15. [Open questions](#open-questions)
 
 ---
 
@@ -248,12 +246,10 @@ One table, two kinds. Shared columns first:
 | contact_phone | varchar(20) | |
 | note | text null | |
 | subtotal | numeric | |
-| discount_amount | numeric | |
 | deposit_amount | numeric | |
 | deposit_paid_at | timestamp null | |
 | total_amount | numeric | |
 | currency | char(3) | |
-| promo_code_id | FK promo_codes null | |
 | receipt_number | varchar unique | "Chek raqami" |
 | ticket_code | varchar(16) unique | human fallback |
 | qr_token | varchar(32) unique | shown to the venue |
@@ -283,7 +279,7 @@ Kind-specific:
 Restaurant menu pre-order (the Menu step of the wizard).
 
 ### booking_price_lines
-`id`, `booking_id` FK, `sort_order`, `line_type` enum(hall_rental, catering, service_logistics, discount, deposit), `label_snapshot`, `unit_price`, `quantity`, `amount`
+`id`, `booking_id` FK, `sort_order`, `line_type` enum(hall_rental, catering, service_logistics, deposit), `label_snapshot`, `unit_price`, `quantity`, `amount`
 
 Backs the "Detailed Price Report". Frozen at confirmation.
 
@@ -295,24 +291,7 @@ Backs the "Detailed Price Report". Frozen at confirmation.
 
 ---
 
-## 9. payments
-
-### payment_cards
-`id`, `user_id` FK, `provider`, `provider_token`, `brand` enum(humo, uzcard, visa, mastercard), `last_four` char(4), `holder_name`, `expiry_month`, `expiry_year`, `is_default`, `verified_at` null
-
-**Never store the PAN.** The add-card form collects number + MM/YY, sends them straight to the provider, and persists only the returned token.
-
-### payments
-`id`, `user_id` FK, `booking_id` FK null, `subscription_id` FK null, `card_id` FK null, `provider`, `provider_transaction_id`, `kind` enum(deposit, balance, full, subscription), `amount`, `currency`, `status` enum(created, pending, paid, failed, refunded), `paid_at` null, `failed_reason` null
-
-`CHECK` exactly one of `booking_id` / `subscription_id` is set.
-
-### refunds
-`id`, `payment_id` FK, `amount`, `reason`, `status`, `provider_refund_id`, `refunded_at`
-
----
-
-## 10. subscriptions
+## 9. subscriptions
 
 ### subscription_plans
 `id`, `code` enum(monthly, yearly), `price`, `currency`, `duration_days`, `benefit_percent`, `is_active`, `sort_order`
@@ -323,29 +302,7 @@ Backs the "Detailed Price Report". Frozen at confirmation.
 
 ---
 
-## 11. promotions
-
-### promo_codes
-`id`, `code` varchar unique (uppercase), `discount_type` enum(percent, fixed), `value`, `applies_to` enum(booking, subscription, both), `min_amount` null, `max_discount` null, `usage_limit_total` null, `usage_limit_per_user`, `used_count`, `valid_from`, `valid_to`, `is_active`
-
-### user_promo_codes
-`id`, `user_id` FK, `promo_code_id` FK, `code`, `source` enum(signup, campaign, compensation), `status` enum(active, used, expired), `expires_at`, `used_at` null
-
-This is the Voucher tab. The `05:35:49` countdown is `expires_at - now()` computed at render time — never stored.
-
-### promo_code_redemptions
-`id`, `promo_code_id` FK, `user_id` FK, `booking_id` FK null, `subscription_id` FK null, `discount_amount`, `redeemed_at`
-
-### banners
-`id`, `image_url`, `target_type` enum(venue, category, promo, url), `target_id` null, `target_url` null, `sort_order`, `starts_at`, `ends_at`, `is_active`
-### banner_translations
-`id`, `banner_id` FK, `language_id` FK, `title`, `subtitle`
-
-Backs the "Eng yaxshi takliflar" carousel.
-
----
-
-## 12. reviews
+## 10. reviews
 
 ### reviews
 `id`, `user_id` FK, `venue_id` FK, `booking_id` FK unique null, `rating` smallint (1–5), `comment` text, `is_verified` bool, `status` enum(pending, published, rejected), `published_at`
@@ -360,7 +317,7 @@ The "Verified" badge means `booking_id IS NOT NULL`. The unique constraint gives
 
 ---
 
-## 13. engagement
+## 11. engagement
 
 ### favorites
 `id`, `user_id` FK, `venue_id` FK — `UNIQUE (user_id, venue_id)`, the bookmark icon
@@ -385,7 +342,7 @@ The Xabarlar screen groups client-side by Today / This Week / This Month from `s
 ## Design decisions
 
 **1. One bookings table, two kinds.**
-Restaurant and to'yxona share roughly 80% of columns — dates, status, ticket, QR, deposit, payments, cancellation. Splitting them duplicates all of that machinery twice. One table with a `kind` discriminator plus CHECK constraints; the service layer branches per wizard.
+Restaurant and to'yxona share roughly 80% of columns — dates, status, ticket, QR, deposit, cancellation. Splitting them duplicates all of that machinery twice. One table with a `kind` discriminator plus CHECK constraints; the service layer branches per wizard.
 
 **2. Venue type is many-to-many.**
 The owner picks Restoran, To'yxona, or Barchasi. A single FK cannot express a venue that is both, and the home screen filters by type, so this must be a join table.
@@ -403,7 +360,7 @@ Onboarding asks how many 2/4/6/8/10+ seat tables exist; booking needs numbered t
 `checked_in_at` on scan, `checked_out_at` when the venue closes the visit, `seated_minutes` written once. "Qoldi: 2 soat 25 daqiqa" is live arithmetic; "Umumiy o'tirildi: 4 soat" reads the stored column.
 
 **7. Deposit is deducted, not added.**
-`deposit_amount` is a percentage of `total_amount` and comes off it. `payments.kind` separates the deposit from the balance; both rows point at the same booking.
+`deposit_amount` is a percentage of `total_amount` and comes off it. `deposit_paid_at` records that it was settled; the balance is what remains against `total_amount`.
 
 **8. Price snapshots everywhere.**
 `booking_items.unit_price` + `name_snapshot`, and all `booking_price_lines`, are frozen at confirmation. Never rebuild an old receipt by joining to live `menu_items` or `venue_guest_tiers` — prices and names change.
@@ -412,13 +369,13 @@ Onboarding asks how many 2/4/6/8/10+ seat tables exist; booking needs numbered t
 `booking_date` DATE + `start_time` TIME with no conversion: 11:00 must stay 11:00. UTC applies only to `created_at`, `confirmed_at`, `checked_in_at` and similar audit columns.
 
 **10. Translation tables, not JSONB.**
-Only three languages, but user-visible text still gets `*_translations` tables (venue, venue_type, amenity, menu_category, menu_item, catering, plan, banner). JSONB cannot be indexed or full-text searched properly. Fallback chain user language → uz → en, resolved in the service.
+Only three languages, but user-visible text still gets `*_translations` tables (venue, venue_type, amenity, menu_category, menu_item, catering, plan). JSONB cannot be indexed or full-text searched properly. Fallback chain user language → uz → en, resolved in the service.
 
 **11. Account deletion is a soft delete.**
-"Akkauntni o'chirish" sets `status = 'deleted'` and `deleted_at`, nulls phone/email/avatar, revokes tokens and cards. Bookings and payments stay for accounting; reviews become anonymous. A hard delete would break financial history.
+"Akkauntni o'chirish" sets `status = 'deleted'` and `deleted_at`, nulls phone/email/avatar and revokes tokens. Bookings and orders stay for accounting; reviews become anonymous. A hard delete would break financial history.
 
 **12. Denormalized counters are service-owned.**
-`rating_avg`, `reviews_count`, `promo_codes.used_count` recomputed by the owning service on write. No DB triggers.
+`rating_avg` and `reviews_count` recomputed by the owning service on write. No DB triggers.
 
 ---
 
@@ -451,7 +408,6 @@ Two users tapping "Tasdiqlash va band qilish" in the same second produce one suc
 | GIN + `pg_trgm` on `menu_item_translations.name` | in-menu search |
 | `(destination, purpose, created_at)` on verification_codes | OTP rate limiting / resend throttle |
 | `(venue_id, booking_date, status)` on bookings | availability queries |
-| `(user_id, status, expires_at)` on user_promo_codes | Voucher tab |
 
 ---
 
@@ -459,7 +415,7 @@ Two users tapping "Tasdiqlash va band qilish" in the same second produce one suc
 
 ```
 languages → geo → auth → catalog → venues → menu → catering
-    → promotions → subscriptions → bookings → payments → reviews → engagement
+    → subscriptions → bookings → reviews → engagement
 ```
 
 First revision is an empty baseline with no models. Everything depends on `languages` and `auth`, so those come first.

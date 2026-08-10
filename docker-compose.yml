@@ -22,6 +22,19 @@ services:
       retries: 10
       start_period: 10s
 
+  redis:
+    # Nothing reaches it today — it was the Eskiz token cache. Kept in the stack
+    # because the availability cache is the next thing due to move into it.
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   backend:
     build:
       context: .
@@ -29,12 +42,16 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     env_file:
       - .env
     environment:
       # Inside the compose network the database is reachable as `postgres`,
       # which overrides the localhost URL in .env.
       APP_CONFIG__DATABASE__URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-baz}
+      # Same reason as the database URL: inside the network the host is the service name.
+      APP_CONFIG__REDIS__URL: redis://redis:6379/0
       TZ: UTC
     ports:
       - "${BACKEND_PORT:-8000}:8000"
