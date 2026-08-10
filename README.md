@@ -45,8 +45,37 @@ POSTGRES_PORT=5442 BACKEND_PORT=8010 docker compose up -d
 uv sync
 docker compose up -d postgres          # or point .env at your own Postgres
 uv run alembic upgrade head
+uv run python -m scripts.seed_demo     # optional: demo venues, menus, bookings
 uv run uvicorn app.main:app --reload
 ```
+
+## Seed data
+
+Two layers, and they are not interchangeable.
+
+**Reference data ships in migrations**, so `alembic upgrade head` alone yields a
+database the app can run on: the three interface languages (`uz`, `en`, `ru`),
+staff roles, permissions, the service catalogue, amenities, and the whole
+geography — 14 regions and 209 districts of Uzbekistan, keyed by ISO 3166-2:UZ
+codes, with a centre coordinate per district. `venues.district_id` is NOT NULL,
+so onboarding is impossible without the last of those.
+
+**Demo data is a script**, because none of it belongs in staging or production:
+
+```sh
+uv run python -m scripts.seed_demo
+```
+
+It writes three chains, six branches (four restaurants and two to'yxona), their
+zones, tables, working hours, photos, amenities, guest tiers, menus, services,
+staff, bookings, open checks, reviews and favourites, plus 29 accounts — one
+admin, one moderator, three owners, six customers and eighteen employees. Every
+account signs in with the phone number printed at the end and the password
+`demo1234`.
+
+Each run truncates the demo-owned tables first, so it is idempotent. It never
+touches `regions` or `districts`, and it refuses to run unless
+`APP_CONFIG__ENV=local`.
 
 ## Checks
 
