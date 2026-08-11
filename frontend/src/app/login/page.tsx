@@ -2,7 +2,18 @@
 
 import React, { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import { useQueryClient } from "@tanstack/react-query";
 import { useTheme } from "@/components/theme-provider";
+import {
+  authKeys,
+  checkPhone,
+  getMyGroup,
+  login,
+  register,
+  staffLogin,
+} from "@/lib/api/endpoints/auth";
+import { ApiError, type TokenPair } from "@/lib/api/types";
+import { useSession } from "@/lib/hooks/use-session";
 import {
   Globe,
   Search,
@@ -38,8 +49,7 @@ type Step =
   | 2
   | "login"
   | "register_customer"
-  | "register_customer_phone_otp"
-  | "register_customer_email_otp"
+  | "register_customer_password"
   | "register_customer_name"
   | 3
   | "partner_address"
@@ -116,6 +126,10 @@ export default function LoginPage() {
   const [phone, setPhone] = useState("");
   const [otp, setOtp] = useState(["", "", "", "", "", ""]);
   const [fullName, setFullName] = useState("");
+  // Two fields, because the API requires both and a space is not a reliable
+  // divider between a given name and a family name.
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
   const [location, setLocation] = useState("Tashkent, Tashkent city");
   const [role, setRole] = useState<"customer" | "partner">("customer");
   
@@ -202,47 +216,117 @@ export default function LoginPage() {
   };
 
   const [isCaps, setIsCaps] = useState(false);
+  const queryClient = useQueryClient();
+  const session = useSession();
   
-  const handleCustomerFinalRegister = () => {
+  /** The one place a successful sign-in lands, whichever screen produced it. */
+  const afterAuth = async (pair: TokenPair) => {
+    await queryClient.invalidateQueries({ queryKey: authKeys.me() });
+    await queryClient.invalidateQueries({ queryKey: authKeys.myGroup() });
+
+    // Both of these are refusals to continue, not preferences.
+    if (pair.must_change_password) {
+      setStep("register_customer_password");
+      showToast("Parolingizni yangilang");
+      return;
+    }
+    if (!pair.profile_completed) {
+      setStep("register_customer_name");
+      return;
+    }
+
+    setIsRegistered(true);
+    showToast("Tizimga muvaffaqiyatli kirdingiz!");
+
+    // A partner is someone who owns a chain — ask, rather than trust a flag.
+    // Routed through the query client so `useSession` reuses the same answer
+    // instead of asking again a moment later.
+    try {
+      await queryClient.fetchQuery({ queryKey: authKeys.myGroup(), queryFn: () => getMyGroup() });
+      router.push("/admin");
+    } catch {
+      router.push("/feed");
+    }
+  };
+
+  const describe = (err: unknown) =>
+    err instanceof ApiError ? err.message : "Xatolik yuz berdi. Qaytadan urinib ko'ring.";
+
+  /**
+   * The phone number decides the next screen.
+   *
+   * There is no "do you already have an account?" question, because the server
+   * knows. `password_required` distinguishes an account with a password from one
+   * that signs in on the number alone.
+   */
+  const handlePhoneContinue = async () => {
     setError("");
-    if (!fullName.trim()) {
-      setError("Ismingizni kiriting!");
+    setLoading(true);
+    try {
+      const result = await checkPhone("+998" + phone.trim());
+      if (result.registered) {
+        setStep(result.password_required ? "register_customer_password" : "login");
+        if (!result.password_required) {
+          await afterAuth(await login("+998" + phone.trim()));
+        }
+      } else {
+        setStep("register_customer_name");
+      }
+    } catch (err) {
+      setError(describe(err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  /** A returning customer typing their password. */
+  const handlePasswordSubmit = async () => {
+    setError("");
+    if (!password.trim()) {
+      setError("Parolni kiriting!");
+      return;
+    }
+    setLoading(true);
+    try {
+      await afterAuth(await login("+998" + phone.trim(), password.trim()));
+    } catch (err) {
+      setError(describe(err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  /**
+   * Registration: name, surname and password, in one screen.
+   *
+   * First and last name are separate fields because the API requires both and
+   * splitting one string on a space is guessing at where a name divides.
+   */
+  const handleCustomerFinalRegister = async () => {
+    setError("");
+    if (!firstName.trim() || !lastName.trim()) {
+      setError("Ism va familiyangizni kiriting!");
+      return;
+    }
+    if (password.trim().length < 6) {
+      setError("Parol kamida 6 ta belgidan iborat bo'lsin!");
       return;
     }
 
     setLoading(true);
-    setTimeout(() => {
-      setLoading(false);
-      const newAccount = {
-        username: phone.trim(),
-        password: "default_password",
-        role: "customer" as const,
-        name: fullName.trim(),
+    try {
+      const pair = await register({
         phone: "+998" + phone.trim(),
-        location: "Tashkent, Tashkent city"
-      };
-
-      const accountsRaw = localStorage.getItem("registeredAccounts");
-      let accountsList = [];
-      if (accountsRaw) {
-        try {
-          accountsList = JSON.parse(accountsRaw) as any[];
-        } catch (err) {}
-      }
-      accountsList.push(newAccount);
-      localStorage.setItem("registeredAccounts", JSON.stringify(accountsList));
-
-      localStorage.setItem("fullName", newAccount.name);
-      localStorage.setItem("phone", newAccount.phone);
-      localStorage.setItem("location", newAccount.location);
-      localStorage.setItem("userRole", newAccount.role);
-      localStorage.setItem("isRegistered", "true");
-      
-      setIsRegistered(true);
-      setRole("customer");
-      showToast("Ro'yxatdan muvaffaqiyatli o'tdingiz!");
-      router.push("/feed");
-    }, 1000);
+        first_name: firstName.trim(),
+        last_name: lastName.trim(),
+        password: password.trim(),
+      });
+      await afterAuth(pair);
+    } catch (err) {
+      setError(describe(err));
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleCustomKeyPress = (key: string) => {
@@ -256,7 +340,7 @@ export default function LoginPage() {
           setPhone(prev => prev + key);
         }
       }
-    } else if (step === "register_customer_phone_otp" || step === "register_customer_email_otp") {
+    } else if (step === "register_customer_password") {
       if (key === "⌫") {
         const newOtp = [...otp];
         for (let i = 5; i >= 0; i--) {
@@ -518,17 +602,19 @@ export default function LoginPage() {
   const [activeModal, setActiveModal] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState("");
 
-  // Mount effect to check registration state
   useEffect(() => {
     setMounted(true);
-    const registered = localStorage.getItem("isRegistered") === "true";
-    if (registered) {
-      setIsRegistered(true);
-      setFullName(localStorage.getItem("fullName") || "Alisher Raimov");
-      setLocation(localStorage.getItem("location") || "Tashkent, Tashkent city");
-      setPhone(localStorage.getItem("phone") || "");
-    }
   }, []);
+
+  // The profile screen shows whoever the server says is signed in. The five
+  // localStorage keys this used to read are gone, along with the plain-text
+  // password list that sat beside them.
+  useEffect(() => {
+    if (!session.user) return;
+    setIsRegistered(true);
+    setFullName(`${session.user.first_name} ${session.user.last_name}`);
+    setPhone(session.user.phone ?? "");
+  }, [session.user]);
 
   // Dynamic bottom navigation bar visibility controller for cards sub-flows & logout drawers
   useEffect(() => {
@@ -592,21 +678,17 @@ export default function LoginPage() {
     showToast("Profil muvaffaqiyatli saqlandi!");
   };
 
-  const handleLogout = () => {
-    localStorage.removeItem("isRegistered");
-    localStorage.removeItem("fullName");
-    localStorage.removeItem("phone");
-    localStorage.removeItem("location");
-    localStorage.removeItem("userRole");
+  const handleLogout = async () => {
+    // Ends the session on the server too: dropping the refresh token here alone
+    // would leave a working credential in the database for thirty days.
+    await session.signOut();
     setIsRegistered(false);
     setFullName("");
     setPhone("");
+    setPassword("");
     setStep(1);
     setActiveModal(null);
     showToast("Akkauntdan chiqildi.");
-    if (typeof window !== "undefined") {
-      window.dispatchEvent(new Event("isRegisteredChange"));
-    }
   };
 
   const filteredLanguages = LANGUAGES.filter((l) =>
@@ -679,12 +761,10 @@ export default function LoginPage() {
       setStep(1);
     } else if (step === "login" || step === "register_customer") {
       setStep(2);
-    } else if (step === "register_customer_phone_otp") {
+    } else if (step === "register_customer_password") {
       setStep("register_customer");
-    } else if (step === "register_customer_email_otp") {
-      setStep("register_customer_phone_otp");
     } else if (step === "register_customer_name") {
-      setStep("register_customer_email_otp");
+      setStep("register_customer");
     } else if (step === 3) {
       setStep(2);
     } else if (step === "partner_address") {
@@ -712,26 +792,7 @@ export default function LoginPage() {
     }
   };
 
-  const handleOtpChange = (value: string, index: number) => {
-    if (isNaN(Number(value))) return;
-    const newOtp = [...otp];
-    newOtp[index] = value.substring(value.length - 1);
-    setOtp(newOtp);
-
-    if (value && index < 5) {
-      const nextInput = document.getElementById(`otp-${index + 1}`);
-      nextInput?.focus();
-    }
-  };
-
-  const handleOtpKeyDown = (e: React.KeyboardEvent<HTMLInputElement>, index: number) => {
-    if (e.key === "Backspace" && !otp[index] && index > 0) {
-      const prevInput = document.getElementById(`otp-${index - 1}`);
-      prevInput?.focus();
-    }
-  };
-
-  const handleLoginSubmit = (e: React.FormEvent) => {
+  const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
 
@@ -740,64 +801,16 @@ export default function LoginPage() {
       return;
     }
 
-    // Default admin credentials bypass
-    if (username.trim() === "admin" && password.trim() === "admin") {
-      localStorage.setItem("fullName", "Admin Hamkor");
-      localStorage.setItem("phone", "+998991234567");
-      localStorage.setItem("location", "Tashkent, Tashkent city");
-      localStorage.setItem("userRole", "partner");
-      localStorage.setItem("isRegistered", "true");
-      setIsRegistered(true);
-      setRole("partner");
-      setFullName("Admin Hamkor");
-      showToast("Tizimga muvaffaqiyatli kirdingiz!");
-      router.push("/admin");
-      return;
+    setLoading(true);
+    try {
+      await afterAuth(await staffLogin(username.trim(), password.trim()));
+    } catch (err) {
+      // The server refuses an unknown login and a wrong password identically,
+      // on purpose — this message must not distinguish them either.
+      setError(describe(err));
+    } finally {
+      setLoading(false);
     }
-
-    // Check saved credentials database
-    const accountsRaw = localStorage.getItem("registeredAccounts");
-    if (accountsRaw) {
-      try {
-        const accounts = JSON.parse(accountsRaw) as any[];
-        const found = accounts.find(
-          (a) => a.username === username.trim() && a.password === password.trim()
-        );
-        if (found) {
-          localStorage.setItem("fullName", found.name);
-          localStorage.setItem("phone", found.phone);
-          localStorage.setItem("location", found.location || "Tashkent, Tashkent city");
-          localStorage.setItem("userRole", found.role);
-          localStorage.setItem("isRegistered", "true");
-          setIsRegistered(true);
-          setRole(found.role);
-          setFullName(found.name);
-          setPhone(found.phone);
-          showToast("Tizimga muvaffaqiyatli kirdingiz!");
-          if (found.role === "partner") {
-            router.push("/admin");
-          } else {
-            router.push("/feed");
-          }
-          return;
-        }
-      } catch (err) {}
-    }
-
-    setError("Login yoki parol noto'g'ri!");
-  };
-
-  const handleCustomerRegisterSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    setError("");
-
-    if (!fullName.trim() || !phone.trim() || !password.trim()) {
-      setError("Iltimos, barcha maydonlarni to'ldiring!");
-      return;
-    }
-
-    // Save to active state and verify via phone step
-    setStep(6); // Telefon raqami tasdiqlash
   };
 
   const handleOtpConfirm = () => {
@@ -2357,7 +2370,7 @@ export default function LoginPage() {
               {/* Wizard Navigation Header */}
               {step !== 1 && step !== 2 && (
                 <div className="flex justify-end mb-4">
-                  {["register_customer", "register_customer_phone_otp", "register_customer_email_otp", "register_customer_name"].includes(String(step)) ? (
+                  {["register_customer", "register_customer_password", "register_customer_name"].includes(String(step)) ? (
                     <button
                       onClick={() => setStep(2)}
                       className={`p-2 rounded-xl transition-colors cursor-pointer ${
@@ -2679,7 +2692,7 @@ export default function LoginPage() {
                             return;
                           }
                           setError("");
-                          setStep("register_customer_phone_otp");
+                          void handlePhoneContinue();
                         }}
                         className={`w-full py-3.5 rounded-[20px] font-bold text-sm tracking-wide transition-all active:scale-98 shadow-lg ${
                           phone.length === 9
@@ -2697,8 +2710,8 @@ export default function LoginPage() {
                   </div>
                 )}
 
-                {/* Step "register_customer_phone_otp": Phone OTP verification */}
-                {step === "register_customer_phone_otp" && (
+                {/* Step "register_customer_password": a returning customer */}
+                {step === "register_customer_password" && (
                   <div className="flex-1 flex flex-col justify-between animate-scale-up space-y-6">
                     <div className="space-y-5">
                       <div className="text-left space-y-1">
@@ -2710,10 +2723,10 @@ export default function LoginPage() {
                           >
                             <ChevronLeft className="h-7 w-7 stroke-[2.5px]" />
                           </button>
-                          <h2 className={`text-2xl font-extrabold ${isDark ? "text-white" : "text-black"}`}>Tasdiqlash kodi</h2>
+                          <h2 className={`text-2xl font-extrabold ${isDark ? "text-white" : "text-black"}`}>Parol</h2>
                         </div>
                         <p className={`text-sm ${isDark ? "text-white/60" : "text-zinc-500"} pl-7`}>
-                          Telefon raqamingizga yuborilgan 6 xonali kodni kiriting <span className="text-[#FF5A00] font-semibold">+998 {formatPhone(phone)}</span>
+                          +998 {formatPhone(phone)} uchun parolni kiriting
                         </p>
                       </div>
 
@@ -2724,140 +2737,38 @@ export default function LoginPage() {
                       )}
 
                       <input
-                        type="text"
-                        value={otp.join("")}
-                        onChange={(e) => setOtp(e.target.value.split(""))}
-                        placeholder="000000"
+                        type="password"
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        placeholder="Parol"
+                        autoComplete="current-password"
                         className={`w-full px-4 py-3.5 rounded-2xl border transition-all outline-none ${
-                          isDark ? "bg-[#2C2C2E]/60 border-white/10 text-white focus:border-[#FF5A00]" : "bg-zinc-50 border-zinc-200 text-black focus:border-[#FF5A00]"
+                          isDark
+                            ? "bg-[#2C2C2E]/60 border-white/10 text-white focus:border-[#FF5A00]"
+                            : "bg-zinc-50 border-zinc-200 text-black focus:border-[#FF5A00]"
                         } text-sm font-bold tracking-wide`}
                       />
-
-                      {/* Resend Code Link */}
-                      <div className="text-center">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            showToast("Tasdiqlash kodi qayta yuborildi!");
-                            setOtp(["", "", "", "", "", ""]);
-                          }}
-                          className="text-xs font-bold text-[#FF5A00] hover:text-[#E04F00] transition-colors"
-                        >
-                          Kod qayta yuborilsinmi?
-                        </button>
-                      </div>
                     </div>
 
                     <div className="space-y-4">
-                      {/* Next Button */}
                       <button
                         type="button"
-                        onClick={() => {
-                          if (otp.some((d) => d === "")) {
-                            setError("6 xonali kodni to'liq kiriting!");
-                            return;
-                          }
-                          setError("");
-                          // Clear OTP state for next email screen
-                          setOtp(["", "", "", "", "", ""]);
-                          setStep("register_customer_email_otp");
-                        }}
+                        disabled={loading || !password.trim()}
+                        onClick={() => void handlePasswordSubmit()}
                         className={`w-full py-3.5 rounded-[20px] font-bold text-sm tracking-wide transition-all active:scale-98 shadow-lg ${
-                          !otp.some((d) => d === "")
+                          password.trim() && !loading
                             ? "bg-[#FF5A00] text-white shadow-[#FF5A00]/25 cursor-pointer hover:bg-[#E04F00]"
                             : isDark
                               ? "bg-white/10 text-white/30 cursor-not-allowed"
                               : "bg-[#FF5A00]/20 text-[#FF5A00]/45 cursor-not-allowed"
                         }`}
                       >
-                        Keyingisi
+                        {loading ? "Tekshirilmoqda..." : "Kirish"}
                       </button>
-
-
                     </div>
                   </div>
                 )}
 
-                {/* Step "register_customer_email_otp": Email OTP verification */}
-                {step === "register_customer_email_otp" && (
-                  <div className="flex-1 flex flex-col justify-between animate-scale-up space-y-6">
-                    <div className="space-y-5">
-                      <div className="text-left space-y-1">
-                        <div className="flex items-center gap-1.5 -ml-2">
-                          <button
-                            type="button"
-                            onClick={handleBackStep}
-                            className="p-1 rounded-lg transition-colors cursor-pointer text-zinc-950 dark:text-white hover:opacity-75"
-                          >
-                            <ChevronLeft className="h-7 w-7 stroke-[2.5px]" />
-                          </button>
-                          <h2 className={`text-2xl font-extrabold ${isDark ? "text-white" : "text-black"}`}>Email tasdiqlash</h2>
-                        </div>
-                        <p className={`text-sm ${isDark ? "text-white/60" : "text-zinc-500"} pl-7`}>
-                          Tasdiqlash kodi elektron pochtangizga yuborildi: <span className="text-[#FF5A00] font-semibold">all*****mov564@gmail.com</span>
-                        </p>
-                      </div>
-
-                      {error && (
-                        <div className="rounded-xl bg-red-500/10 border border-red-500/20 p-3 text-xs text-red-400 text-center font-bold">
-                          {error}
-                        </div>
-                      )}
-
-                      <input
-                        type="text"
-                        value={otp.join("")}
-                        onChange={(e) => setOtp(e.target.value.split(""))}
-                        placeholder="000000"
-                        className={`w-full px-4 py-3.5 rounded-2xl border transition-all outline-none ${
-                          isDark ? "bg-[#2C2C2E]/60 border-white/10 text-white focus:border-[#FF5A00]" : "bg-zinc-50 border-zinc-200 text-black focus:border-[#FF5A00]"
-                        } text-sm font-bold tracking-wide`}
-                      />
-
-                      {/* Resend Code Link */}
-                      <div className="text-center">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            showToast("Tasdiqlash kodi qayta yuborildi!");
-                            setOtp(["", "", "", "", "", ""]);
-                          }}
-                          className="text-xs font-bold text-[#FF5A00] hover:text-[#E04F00] transition-colors"
-                        >
-                          Kod qayta yuborilsinmi?
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="space-y-4">
-                      {/* Next Button */}
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (otp.some((d) => d === "")) {
-                            setError("6 xonali kodni to'liq kiriting!");
-                            return;
-                          }
-                          setError("");
-                          setStep("register_customer_name");
-                        }}
-                        className={`w-full py-3.5 rounded-[20px] font-bold text-sm tracking-wide transition-all active:scale-98 shadow-lg ${
-                          !otp.some((d) => d === "")
-                            ? "bg-[#FF5A00] text-white shadow-[#FF5A00]/25 cursor-pointer hover:bg-[#E04F00]"
-                            : isDark
-                              ? "bg-white/10 text-white/30 cursor-not-allowed"
-                              : "bg-[#FF5A00]/20 text-[#FF5A00]/45 cursor-not-allowed"
-                        }`}
-                      >
-                        Keyingisi
-                      </button>
-
-
-                    </div>
-                  </div>
-                )}
-
-                {/* Step "register_customer_name": Name entry screen */}
                 {step === "register_customer_name" && (
                   <div className="flex-1 flex flex-col justify-between animate-scale-up space-y-6">
                     <div className="space-y-5">
@@ -2870,9 +2781,9 @@ export default function LoginPage() {
                           >
                             <ChevronLeft className="h-7 w-7 stroke-[2.5px]" />
                           </button>
-                          <h2 className={`text-2xl font-extrabold ${isDark ? "text-white" : "text-black"}`}>Ism va familiya</h2>
+                          <h2 className={`text-2xl font-extrabold ${isDark ? "text-white" : "text-black"}`}>Ro&apos;yxatdan o&apos;tish</h2>
                         </div>
-                        <p className={`text-sm ${isDark ? "text-white/60" : "text-zinc-500"} pl-7`}>Ismingizni kiriting</p>
+                        <p className={`text-sm ${isDark ? "text-white/60" : "text-zinc-500"} pl-7`}>Ism, familiya va parolni kiriting</p>
                       </div>
 
                       {error && (
@@ -2881,15 +2792,40 @@ export default function LoginPage() {
                         </div>
                       )}
 
-                      {/* Name Input Box */}
+                      {/* Name, surname and password — the whole registration */}
                       <input
                         type="text"
-                        value={fullName}
-                        onChange={(e) => setFullName(e.target.value)}
-                        placeholder="Ism va familiyangiz"
+                        value={firstName}
+                        onChange={(e) => setFirstName(e.target.value)}
+                        placeholder="Ismingiz"
+                        autoComplete="given-name"
                         className={`w-full px-4 py-3.5 rounded-2xl border transition-all outline-none ${
-                          isDark 
-                            ? "bg-[#2C2C2E]/60 border-white/10 text-white focus:border-[#FF5A00]" 
+                          isDark
+                            ? "bg-[#2C2C2E]/60 border-white/10 text-white focus:border-[#FF5A00]"
+                            : "bg-zinc-50 border-zinc-200 text-black focus:border-[#FF5A00]"
+                        } text-sm font-bold tracking-wide`}
+                      />
+                      <input
+                        type="text"
+                        value={lastName}
+                        onChange={(e) => setLastName(e.target.value)}
+                        placeholder="Familiyangiz"
+                        autoComplete="family-name"
+                        className={`w-full px-4 py-3.5 rounded-2xl border transition-all outline-none ${
+                          isDark
+                            ? "bg-[#2C2C2E]/60 border-white/10 text-white focus:border-[#FF5A00]"
+                            : "bg-zinc-50 border-zinc-200 text-black focus:border-[#FF5A00]"
+                        } text-sm font-bold tracking-wide`}
+                      />
+                      <input
+                        type="password"
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        placeholder="Parol (kamida 6 ta belgi)"
+                        autoComplete="new-password"
+                        className={`w-full px-4 py-3.5 rounded-2xl border transition-all outline-none ${
+                          isDark
+                            ? "bg-[#2C2C2E]/60 border-white/10 text-white focus:border-[#FF5A00]"
                             : "bg-zinc-50 border-zinc-200 text-black focus:border-[#FF5A00]"
                         } text-sm font-bold tracking-wide`}
                       />
@@ -2899,16 +2835,10 @@ export default function LoginPage() {
                       {/* Next/Finish Register Button */}
                       <button
                         type="button"
-                        onClick={() => {
-                          if (!fullName.trim()) {
-                            setError("Iltimos ismingizni kiriting!");
-                            return;
-                          }
-                          setError("");
-                          handleCustomerFinalRegister();
-                        }}
+                        disabled={loading}
+                        onClick={() => void handleCustomerFinalRegister()}
                         className={`w-full py-3.5 rounded-[20px] font-bold text-sm tracking-wide transition-all active:scale-98 shadow-lg ${
-                          fullName.trim()
+                          firstName.trim() && lastName.trim() && password.trim().length >= 6 && !loading
                             ? "bg-[#FF5A00] text-white shadow-[#FF5A00]/25 cursor-pointer hover:bg-[#E04F00]"
                             : isDark
                               ? "bg-white/10 text-white/30 cursor-not-allowed"

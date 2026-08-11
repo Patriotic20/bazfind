@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useTheme } from "@/components/theme-provider";
+import { useSession } from "@/lib/hooks/use-session";
 import {
   LogOut,
   Trash2,
@@ -112,10 +113,11 @@ export default function AdminPage() {
   const { theme, toggleTheme } = useTheme();
   const isDark = theme === "dark";
   const [mounted, setMounted] = useState(false);
-  const [authorized, setAuthorized] = useState(false);
   
   // Custom dashboard states
-  const [partnerName, setPartnerName] = useState("Tinchlik Plaza");
+  // Seeded from the chain the session says this user owns. The branches and
+  // bookings below are still empty until stage E wires them.
+  const [partnerName, setPartnerName] = useState("");
   const [venueHours, setVenueHours] = useState("09:00 - 23:00");
   const [partnerLocation, setPartnerLocation] = useState("Samarqand, Pastdarg'om");
   const [venues, setVenues] = useState<Venue[]>([]);
@@ -132,75 +134,28 @@ export default function AdminPage() {
   const [newStaffRole, setNewStaffRole] = useState("Ofitsiant");
   const [newStaffPhone, setNewStaffPhone] = useState("");
   
+  const session = useSession();
+
   useEffect(() => {
     setMounted(true);
+  }, []);
 
-    const isRegistered = localStorage.getItem("isRegistered") === "true";
-    const userRole = localStorage.getItem("userRole");
-    const name = localStorage.getItem("fullName");
-    const hours = localStorage.getItem("venueHours");
-    const loc = localStorage.getItem("location");
-
-    if (!isRegistered || userRole !== "partner") {
-      // Not logged in as partner, redirect to login wizard flow
+  // Being a partner means owning a chain, which is a question for the server.
+  // This used to read `userRole` out of localStorage — a string the browser
+  // wrote to itself, and therefore no kind of authorisation at all.
+  useEffect(() => {
+    if (!session.isResolved) return;
+    if (!session.signedIn || !session.isPartner) {
       router.push("/login");
-    } else {
-      setAuthorized(true);
-      if (name) setPartnerName(name);
-      if (hours) setVenueHours(hours);
-      if (loc) setPartnerLocation(loc);
-
-      // Load venues
-      const storedVenues = localStorage.getItem("partnerVenues");
-      if (storedVenues) {
-        try {
-          setVenues(JSON.parse(storedVenues));
-        } catch (e) {}
-      } else {
-        const defaultVenues: Venue[] = [
-          {
-            id: "d1",
-            name: name || "Tinchlik Plaza",
-            location: loc || "Samarqand, Pastdarg'om",
-            capacity: "150 kishi",
-            capacityNum: 150,
-            priceText: "152,025,323 UZS dan",
-            priceNum: 152025323,
-            rating: 5.0,
-            category: "restoran",
-            emoji: "🍽️",
-            tags: ["Premium", "Tavsiya etiladi"],
-          },
-          {
-            id: "d2",
-            name: "Visol To'yxonasi",
-            location: "Toshkent sh., Chilonzor",
-            capacity: "500 kishi",
-            capacityNum: 500,
-            priceText: "250 000 UZS dan",
-            priceNum: 250000,
-            rating: 4.9,
-            category: "toyxona",
-            emoji: "🏰",
-            tags: ["Hashamatli", "Yevro"],
-          },
-        ];
-        localStorage.setItem("partnerVenues", JSON.stringify(defaultVenues));
-        setVenues(defaultVenues);
-      }
-
-      // Load bookings
-      const storedBookings = localStorage.getItem("partnerBookings");
-      if (storedBookings) {
-        try {
-          setBookings(JSON.parse(storedBookings));
-        } catch (e) {}
-      } else {
-        localStorage.setItem("partnerBookings", JSON.stringify(DEFAULT_BOOKINGS));
-        setBookings(DEFAULT_BOOKINGS);
-      }
     }
-  }, [router]);
+  }, [router, session.isResolved, session.signedIn, session.isPartner]);
+
+  const authorized = session.isPartner;
+
+  useEffect(() => {
+    if (session.group) setPartnerName(session.group.name);
+  }, [session.group]);
+
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
