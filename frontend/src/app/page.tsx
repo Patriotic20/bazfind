@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useRef } from "react";
 import Link from "next/link";
+import { useQuery } from "@tanstack/react-query";
 import {
   Search,
   SlidersHorizontal,
@@ -22,12 +23,38 @@ import {
 } from "lucide-react";
 import Navbar from "@/components/navbar";
 import { useTheme } from "@/components/theme-provider";
+import { searchVenues, venueKeys, type VenueSearchQuery } from "@/lib/api/endpoints/venues";
+import { formatRating } from "@/lib/api/money";
+import { formatDistance } from "@/lib/format";
+import type { VenueType } from "@/lib/api/types";
+
+/** The three pills, and the venue type each one filters by. */
+const TABS: { label: string; venueType?: VenueType }[] = [
+  { label: "Umumiy" },
+  { label: "Restoranlar", venueType: "restoran" },
+  { label: "To'yxonalar", venueType: "toyxona" },
+];
+
+/**
+ * The search response carries no photo — `VenueListItem` has no image field at
+ * all — so cards fall back to these by position. Replace the moment the API
+ * returns a cover photo in the list.
+ */
+const PLACEHOLDER_IMAGES = [
+  "/images/home/top.png",
+  "/images/home/tuyxona1.png",
+  "/images/home/tuyxona2.png",
+  "/images/home/tuyxona3.png",
+  "/images/home/tuyxona4.png",
+];
 
 export default function WelcomePage() {
   const [mounted, setMounted] = useState(false);
   const [isRegistered, setIsRegistered] = useState(true);
   const [fullName, setFullName] = useState("Shahzod");
   const [activeTab, setActiveTab] = useState("Umumiy");
+  const [searchText, setSearchText] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
   const [currentSlide, setCurrentSlide] = useState(0);
   const [showBookingSuccessToast, setShowBookingSuccessToast] = useState(false);
   const { theme, toggleTheme } = useTheme();
@@ -169,6 +196,30 @@ export default function WelcomePage() {
     return () => clearInterval(interval);
   }, [isRegistered]);
 
+  // Typing must not fire a request per keystroke; the query key only moves once
+  // the user pauses.
+  useEffect(() => {
+    const timer = setTimeout(() => setSearchQuery(searchText.trim()), 350);
+    return () => clearTimeout(timer);
+  }, [searchText]);
+
+  const venueQuery: VenueSearchQuery = {
+    query: searchQuery || undefined,
+    venue_type: TABS.find((tab) => tab.label === activeTab)?.venueType,
+    sort: "rating",
+    limit: 5,
+  };
+
+  const venuesQuery = useQuery({
+    queryKey: venueKeys.search(venueQuery),
+    queryFn: ({ signal }) => searchVenues(venueQuery, signal),
+    enabled: isRegistered,
+  });
+
+  const venues = venuesQuery.data?.items ?? [];
+  // The first result leads as the wide card; the rest fill the grid below it.
+  const [featured, ...rest] = venues;
+
   if (!mounted) {
     return <div className="flex flex-col flex-1 bg-[var(--background)] animate-pulse" />;
   }
@@ -200,7 +251,7 @@ export default function WelcomePage() {
     },
   ];
 
-  const horizontalTabs = ["Umumiy", "Restoranlar", "To'yxonalar"];
+  const horizontalTabs = TABS.map((tab) => tab.label);
 
   return (
     <div className="flex flex-col flex-1 bg-[var(--background)] text-foreground transition-colors duration-300 relative">
@@ -272,9 +323,11 @@ export default function WelcomePage() {
                 <input
                   type="text"
                   placeholder="Qidirish"
+                  value={searchText}
+                  onChange={(e) => setSearchText(e.target.value)}
                   className={`w-full pl-3 pr-4 py-3.5 bg-transparent text-sm font-medium outline-none ${
-                    theme === "dark" 
-                      ? "text-white placeholder:text-white/30" 
+                    theme === "dark"
+                      ? "text-white placeholder:text-white/30"
                       : "text-zinc-800 placeholder:text-zinc-400"
                   }`}
                 />
@@ -388,83 +441,108 @@ export default function WelcomePage() {
                 </Link>
               </div>
 
-              {/* Large Full-Width Restaurant Card */}
-              <Link
-                href="/venue/3"
-                className={`w-full border rounded-3xl flex flex-col gap-4 shadow-lg transition-all block text-left ${
-                  theme === "dark" 
-                    ? "bg-[#393939] border-white/5 p-5 hover:border-white/10" 
-                    : "bg-white border-zinc-100 p-4 hover:border-zinc-200"
-                }`}
-              >
-                {/* Visual Image Display */}
-                <div className={`w-full h-44 rounded-2xl overflow-hidden relative border ${
-                  theme === "dark" ? "border-white/5" : "border-zinc-100"
-                }`}>
-                  <img
-                    src="/images/home/top.png"
-                    alt="Rest One"
-                    className="w-full h-full object-cover"
-                  />
-                </div>
+              {venuesQuery.isPending && (
+                <div className={`w-full h-72 rounded-3xl animate-pulse ${
+                  theme === "dark" ? "bg-[#393939]" : "bg-zinc-100"
+                }`} />
+              )}
 
-                {/* Restaurant details */}
-                <div className="space-y-3">
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <h3 className={`text-base font-extrabold tracking-tight ${theme === "dark" ? "text-white" : "text-zinc-900"}`}>Rest One</h3>
-                      <div className="flex items-center gap-1 text-xs text-green-600 font-bold pt-1">
-                        <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
-                        <span>Ochiq</span>
+              {venuesQuery.isError && (
+                <div className={`w-full rounded-3xl border p-6 text-center text-xs font-bold ${
+                  theme === "dark" ? "bg-[#393939] border-white/5 text-white/60" : "bg-white border-zinc-100 text-zinc-500"
+                }`}>
+                  Muassasalarni yuklab bo'lmadi
+                </div>
+              )}
+
+              {!venuesQuery.isPending && !venuesQuery.isError && !featured && (
+                <div className={`w-full rounded-3xl border p-6 text-center text-xs font-bold ${
+                  theme === "dark" ? "bg-[#393939] border-white/5 text-white/60" : "bg-white border-zinc-100 text-zinc-500"
+                }`}>
+                  Hech narsa topilmadi
+                </div>
+              )}
+
+              {/* Large Full-Width Restaurant Card */}
+              {featured && (
+                <Link
+                  href={`/venue/${featured.id}`}
+                  className={`w-full border rounded-3xl flex flex-col gap-4 shadow-lg transition-all block text-left ${
+                    theme === "dark"
+                      ? "bg-[#393939] border-white/5 p-5 hover:border-white/10"
+                      : "bg-white border-zinc-100 p-4 hover:border-zinc-200"
+                  }`}
+                >
+                  {/* Visual Image Display */}
+                  <div className={`w-full h-44 rounded-2xl overflow-hidden relative border ${
+                    theme === "dark" ? "border-white/5" : "border-zinc-100"
+                  }`}>
+                    <img
+                      src={PLACEHOLDER_IMAGES[0]}
+                      alt={featured.name}
+                      className="w-full h-full object-cover"
+                    />
+                  </div>
+
+                  {/* Restaurant details */}
+                  <div className="space-y-3">
+                    <div className="flex items-start justify-between">
+                      <div>
+                        <h3 className={`text-base font-extrabold tracking-tight ${theme === "dark" ? "text-white" : "text-zinc-900"}`}>{featured.name}</h3>
+                        <div className={`flex items-center gap-1 text-xs font-bold pt-1 ${
+                          featured.is_open_now ? "text-green-600" : "text-zinc-400"
+                        }`}>
+                          <span className={`w-1.5 h-1.5 rounded-full ${featured.is_open_now ? "bg-green-500" : "bg-zinc-400"}`} />
+                          <span>{featured.is_open_now ? "Ochiq" : "Yopiq"}</span>
+                        </div>
+                      </div>
+
+                      {/* Star Rating */}
+                      <div className={`flex items-center gap-1 text-xs font-bold text-[#FFB800] border px-2.5 py-1 rounded-xl ${
+                        theme === "dark" ? "bg-white/5 border-white/5" : "bg-yellow-500/5 border-yellow-500/10"
+                      }`}>
+                        <Star className="h-3.5 w-3.5 fill-[#FFB800] text-[#FFB800]" />
+                        <span>{formatRating(featured.rating_avg)} ({featured.reviews_count} ta sharh)</span>
                       </div>
                     </div>
 
-                    {/* Star Rating */}
-                    <div className={`flex items-center gap-1 text-xs font-bold text-[#FFB800] border px-2.5 py-1 rounded-xl ${
-                      theme === "dark" ? "bg-white/5 border-white/5" : "bg-yellow-500/5 border-yellow-500/10"
-                    }`}>
-                      <Star className="h-3.5 w-3.5 fill-[#FFB800] text-[#FFB800]" />
-                      <span>4.8 (356 ta sharh)</span>
-                    </div>
-                  </div>
+                    {/* Metadata Row */}
+                    <div className="flex justify-between items-center">
+                      <div className={`flex items-center gap-1.5 text-xs font-bold ${theme === "dark" ? "text-white/60" : "text-zinc-500"}`}>
+                        <Compass className="h-4 w-4 text-zinc-400 dark:text-white/40" />
+                        <span>{formatDistance(featured.distance_m) ?? "Masofa noma'lum"}</span>
+                      </div>
 
-                  {/* Metadata Row */}
-                  <div className="flex justify-between items-center">
-                    <div className={`flex items-center gap-1.5 text-xs font-bold ${theme === "dark" ? "text-white/60" : "text-zinc-500"}`}>
-                      <Compass className="h-4 w-4 text-zinc-400 dark:text-white/40" />
-                      <span>1 km uzoqda</span>
+                      {/* Deposit green badge */}
+                      {featured.requires_deposit && (
+                        <div className={`flex items-center gap-1 font-bold rounded-lg px-2.5 py-1 text-[10px] uppercase tracking-wider transition-colors ${
+                          theme === "dark"
+                            ? "bg-green-500/10 border border-green-500/20 text-[#10B981]"
+                            : "bg-[#10B981] text-white shadow-sm"
+                        }`}>
+                          <Wallet className="h-3.5 w-3.5 shrink-0" />
+                          <span>Depozitlik</span>
+                        </div>
+                      )}
                     </div>
 
-                    {/* Deposit green badge */}
-                    <div className={`flex items-center gap-1 font-bold rounded-lg px-2.5 py-1 text-[10px] uppercase tracking-wider transition-colors ${
-                      theme === "dark" 
-                        ? "bg-green-500/10 border border-green-500/20 text-[#10B981]" 
-                        : "bg-[#10B981] text-white shadow-sm"
-                    }`}>
-                      <Wallet className="h-3.5 w-3.5 shrink-0" />
-                      <span>Depozitlik</span>
-                    </div>
+                    {/* Tagline — the list response carries no street address */}
+                    {featured.tagline && (
+                      <div className={`flex items-center gap-1.5 text-xs font-semibold truncate pt-0.5 ${
+                        theme === "dark" ? "text-white/50" : "text-zinc-500"
+                      }`}>
+                        <MapPin className="h-4 w-4 text-zinc-400 dark:text-white/30 shrink-0" />
+                        <span className="truncate">{featured.tagline}</span>
+                      </div>
+                    )}
                   </div>
-
-                  {/* Address */}
-                  <div className={`flex items-center gap-1.5 text-xs font-semibold truncate pt-0.5 ${
-                    theme === "dark" ? "text-white/50" : "text-zinc-500"
-                  }`}>
-                    <MapPin className="h-4 w-4 text-zinc-400 dark:text-white/30 shrink-0" />
-                    <span className="truncate">O'zbekiston ko'chasi 27 - uy</span>
-                  </div>
-                </div>
-              </Link>
+                </Link>
+              )}
             </div>
 
             {/* 2x2 Grid of Restaurants */}
             <div className="grid grid-cols-2 gap-4">
-              {[
-                { id: "1", name: "Sayqal", img: "/images/home/tuyxona1.png", rating: "4.8" },
-                { id: "2", name: "Tinchlik", img: "/images/home/tuyxona2.png", rating: "4.8" },
-                { id: "4", name: "Panorama", img: "/images/home/tuyxona3.png", rating: "4.8" },
-                { id: "5", name: "Sharqona", img: "/images/home/tuyxona4.png", rating: "4.8" }
-              ].map((card) => (
+              {rest.map((card, index) => (
                 <div
                   key={card.id}
                   className={`border rounded-3xl p-3 flex flex-col gap-3 shadow-md text-left relative ${
@@ -476,7 +554,7 @@ export default function WelcomePage() {
                     theme === "dark" ? "bg-zinc-800 border-white/5" : "bg-zinc-100 border-zinc-100"
                   }`}>
                     <img
-                      src={card.img}
+                      src={PLACEHOLDER_IMAGES[(index + 1) % PLACEHOLDER_IMAGES.length]}
                       alt={card.name}
                       className="w-full h-full object-cover"
                     />
@@ -488,22 +566,24 @@ export default function WelcomePage() {
                       <h4 className={`text-xs font-bold tracking-wide truncate ${theme === "dark" ? "text-white" : "text-zinc-950"}`}>{card.name}</h4>
                       <div className="flex items-center gap-0.5 text-[10px] font-bold text-[#FFB800] shrink-0">
                         <Star className="h-3 w-3 fill-[#FFB800] text-[#FFB800]" />
-                        <span>{card.rating}</span>
+                        <span>{formatRating(card.rating_avg)}</span>
                       </div>
                     </div>
 
                     {/* Distance & Status info */}
                     <div className={`flex items-center gap-1 text-[10px] font-bold leading-none ${theme === "dark" ? "text-white/50" : "text-zinc-500"}`}>
                       <Compass className="h-3 w-3 text-zinc-400 dark:text-white/30 shrink-0" />
-                      <span>2 km</span>
+                      <span>{formatDistance(card.distance_m) ?? "—"}</span>
                       <span className="opacity-20">|</span>
-                      <span className="text-[#10B981]">Ochiq</span>
+                      <span className={card.is_open_now ? "text-[#10B981]" : "text-zinc-400"}>
+                        {card.is_open_now ? "Ochiq" : "Yopiq"}
+                      </span>
                     </div>
 
-                    {/* Address */}
+                    {/* Tagline — the list response carries no street address */}
                     <div className={`flex items-center gap-1 text-[10px] font-semibold truncate leading-none ${theme === "dark" ? "text-white/40" : "text-zinc-400"}`}>
                       <MapPin className="h-3 w-3 text-zinc-400 dark:text-white/20 shrink-0" />
-                      <span className="truncate">Umid qo'rg'...</span>
+                      <span className="truncate">{card.tagline ?? "—"}</span>
                     </div>
 
                     {/* View Button */}

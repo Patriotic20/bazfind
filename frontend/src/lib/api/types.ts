@@ -106,3 +106,34 @@ export type District = Schemas["DistrictRead"];
 export type Language = Schemas["LanguageRead"];
 export type TokenPair = Schemas["TokenPair"];
 export type User = Schemas["UserRead"];
+
+/**
+ * The venue, in its two shapes — and there are only two.
+ *
+ * The prototype carried four incompatible `Venue` types, one per screen, which
+ * disagreed on whether `rating` was a number or a string and on whether
+ * `location` meant a region or a street. They also disagreed on which venue an
+ * id referred to. These come from the API, so they cannot drift apart.
+ */
+export type Venue = Schemas["VenueListItem"];
+export type VenueDetail = Schemas["VenueDetailRead"];
+export type VenueType = Schemas["VenueTypeSlug"];
+export type VenuePhoto = Schemas["VenuePhotoRead"];
+export type VenueZone = Schemas["VenueZoneRead"];
+export type AvailableTable = Schemas["AvailableTableRead"];
+export type WorkingHours = Schemas["VenueWorkingHoursRead"];
+export type Amenity = Schemas["AmenityRead"];
+
+export type MenuItem = Schemas["MenuItemListItem"];
+export type Review = Schemas["ReviewListItem"];
+
+export type Booking = Schemas["BookingRead"];
+export type BookingListItem = Schemas["BookingListItem"];
+export type BookingDetail = Schemas["BookingOwnerDetail"];
+export type BookingStatus = Schemas["BookingStatus"];
+
+export type VenueGroup = Schemas["VenueGroupRead"];
+export type Branch = Schemas["BranchListItem"];
+export type StaffMember = Schemas["VenueStaffListItem"];
+export type StaffRole = Schemas["StaffRoleRead"];
+export type Dashboard = Schemas["DashboardRead"];
