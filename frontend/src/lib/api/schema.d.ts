@@ -1352,6 +1352,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/venue/bookings/{booking_id}/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Bronni tasdiqlash
+         * @description Yangi so'rovni qabul qilish. Faqat `pending` bron o'zgaradi, va faqat tasdiqlangan bronning chiptasini skanerlash mumkin.
+         */
+        post: operations["venue_bookings_confirm"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/venue/bookings/{booking_id}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Bronni rad etish
+         * @description So'rovni rad etish. Bron mijoz o'zi bekor qilgandagi kabi `cancelled` holatiga o'tadi; kim rad etgani holat tarixida qoladi.
+         */
+        post: operations["venue_bookings_reject"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/venue/bookings/check-in": {
         parameters: {
             query?: never;
@@ -6522,6 +6562,76 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BookingRead"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    venue_bookings_confirm: {
+        parameters: {
+            query: {
+                venue_id: number;
+            };
+            header?: never;
+            path: {
+                booking_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BookingRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    venue_bookings_reject: {
+        parameters: {
+            query: {
+                venue_id: number;
+            };
+            header?: never;
+            path: {
+                booking_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BookingCancel"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BookingRead"];
                 };
             };
             /** @description Validation Error */
