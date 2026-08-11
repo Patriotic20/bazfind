@@ -54,6 +54,11 @@ services:
       APP_CONFIG__DATABASE__URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-baz}
       # Same reason as the database URL: inside the network the host is the service name.
       APP_CONFIG__REDIS__URL: redis://redis:6379/0
+      # Derived from FRONTEND_PORT rather than repeated in backend/.env, so the
+      # origin the API allows cannot drift from the port the frontend is
+      # published on. Getting these two out of step breaks every request from
+      # the page while leaving curl and Swagger working.
+      APP_CONFIG__CORS__ORIGINS: '["http://localhost:${FRONTEND_PORT:-3000}"]'
       TZ: UTC
     ports:
       - "${BACKEND_PORT:-8000}:8000"
@@ -74,6 +79,26 @@ services:
       timeout: 5s
       retries: 12
       start_period: 30s
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        # The browser resolves this, not the compose network — so it is the
+        # published host port and never `http://backend:8000`. It is baked into
+        # the bundle at build time, which is why it is an arg and not only an
+        # environment variable.
+        NEXT_PUBLIC_API_URL: http://localhost:${BACKEND_PORT:-8000}/api
+    depends_on:
+      backend:
+        # Readiness, not start order: the backend runs migrations before it
+        # binds a port.
+        condition: service_healthy
+    environment:
+      TZ: UTC
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
 
 volumes:
   postgres_data:
