@@ -6,7 +6,6 @@ import {
   ChevronLeft,
   ChevronDown,
   MapPin,
-  Phone,
   Clock,
   CheckCircle,
   X,
@@ -14,7 +13,42 @@ import {
 import Navbar from "@/components/navbar";
 import { useTheme } from "@/components/theme-provider";
 import { geoKeys, listDistricts, listRegions } from "@/lib/api/endpoints/geo";
-import type { District, Region } from "@/lib/api/types";
+import { bookingKeys, listMyBookings } from "@/lib/api/endpoints/bookings";
+import { useSession } from "@/lib/hooks/use-session";
+import { formatUZS } from "@/lib/api/money";
+import { formatDateNumeric, formatTime, parseApiDate } from "@/lib/format";
+import type { BookingStatus, District, Region } from "@/lib/api/types";
+
+/**
+ * One label and one colour per status, in one place.
+ *
+ * The card used to hardcode "Band qilish tasdiqlandi" for every booking, so a
+ * cancelled one read as confirmed.
+ */
+const BOOKING_STATUS: Record<BookingStatus, { label: string; text: string; dot: string }> = {
+  pending: { label: "Tasdiqlanmoqda", text: "text-[#FF6B00]", dot: "bg-[#FF6B00]" },
+  confirmed: { label: "Band qilish tasdiqlandi", text: "text-[#10B981]", dot: "bg-[#10B981]" },
+  checked_in: { label: "Tashrif boshlandi", text: "text-[#10B981]", dot: "bg-[#10B981]" },
+  completed: { label: "Yakunlandi", text: "text-zinc-400", dot: "bg-zinc-400" },
+  cancelled: { label: "Bekor qilindi", text: "text-red-500", dot: "bg-red-500" },
+  no_show: { label: "Kelinmadi", text: "text-red-500", dot: "bg-red-500" },
+  expired: { label: "Muddati o'tdi", text: "text-zinc-400", dot: "bg-zinc-400" },
+};
+
+/** How long until the booking starts, in whole hours and minutes. */
+function timeUntil(bookingDate: string, startTime: string): string {
+  const start = parseApiDate(bookingDate);
+  const [hours, minutes] = startTime.split(":").map(Number);
+  start.setHours(hours, minutes, 0, 0);
+
+  const diff = start.getTime() - Date.now();
+  if (diff <= 0) return "Boshlandi";
+
+  const totalMinutes = Math.floor(diff / 60000);
+  const days = Math.floor(totalMinutes / 1440);
+  if (days >= 1) return `${days} kun`;
+  return `${Math.floor(totalMinutes / 60)} soat ${totalMinutes % 60} daqiqa`;
+}
 
 export default function FeedPage() {
   const { theme } = useTheme();
@@ -77,6 +111,14 @@ export default function FeedPage() {
     staleTime: Infinity,
   });
 
+  const session = useSession();
+
+  const myBookingsQuery = useQuery({
+    queryKey: bookingKeys.mine(),
+    queryFn: ({ signal }) => listMyBookings(undefined, signal),
+    enabled: session.signedIn,
+  });
+
   const districtsQuery = useQuery({
     queryKey: geoKeys.districts(selectedRegion?.id ?? 0),
     queryFn: ({ signal }) => listDistricts(selectedRegion!.id, signal),
@@ -102,6 +144,7 @@ export default function FeedPage() {
     }
   };
 
+  const myBookings = myBookingsQuery.data ?? [];
   const regions = regionsQuery.data ?? [];
   const districts = districtsQuery.data ?? [];
 
@@ -343,106 +386,127 @@ export default function FeedPage() {
 
           {/* Scrollable Bookings List */}
           <main className="flex-1 overflow-y-auto px-6 py-6 pb-10 flex flex-col gap-6 max-w-md mx-auto w-full text-left">
-            {[
-              { id: "1", showBanner: true },
-              { id: "2", showBanner: false }
-            ].map((item) => (
+            {!session.signedIn && (
+              <div className={`w-full rounded-3xl border p-8 text-center text-sm font-bold ${
+                isDark ? "bg-[#393939] border-white/5 text-white/60" : "bg-white border-zinc-100 text-zinc-500"
+              }`}>
+                Bronlaringizni ko&apos;rish uchun tizimga kiring
+              </div>
+            )}
+
+            {session.signedIn && myBookingsQuery.isPending && (
+              <div className={`w-full h-56 rounded-3xl animate-pulse ${isDark ? "bg-[#393939]" : "bg-zinc-100"}`} />
+            )}
+
+            {session.signedIn && myBookingsQuery.isError && (
+              <div className={`w-full rounded-3xl border p-8 text-center text-sm font-bold ${
+                isDark ? "bg-[#393939] border-white/5 text-white/60" : "bg-white border-zinc-100 text-zinc-500"
+              }`}>
+                Bronlarni yuklab bo&apos;lmadi
+              </div>
+            )}
+
+            {session.signedIn && myBookingsQuery.isSuccess && myBookings.length === 0 && (
+              <div className={`w-full rounded-3xl border p-8 text-center text-sm font-bold ${
+                isDark ? "bg-[#393939] border-white/5 text-white/60" : "bg-white border-zinc-100 text-zinc-500"
+              }`}>
+                Hozircha bronlaringiz yo&apos;q
+              </div>
+            )}
+
+            {myBookings.map((booking) => {
+              const badge = BOOKING_STATUS[booking.status];
+              return (
               <div
-                key={item.id}
+                key={booking.id}
                 className={`w-full rounded-3xl p-5 flex flex-col gap-4 transition-all duration-300 ${
                   isDark
                     ? "bg-[#393939] border border-white/5 shadow-xl hover:border-white/10"
                     : "bg-white border border-[#FF6B00] shadow-md hover:shadow-lg hover:border-primary/80"
                 }`}
               >
-                {/* Top Restaurant Detail */}
                 <div className="flex items-start gap-4">
-                  {/* Rounded restaurant image */}
+                  {/* The list response carries no photo, and fetching the detail
+                      per card would make a list into N requests. */}
                   <img
                     src="/images/restaurant.png"
-                    alt="Rest One"
+                    alt={booking.venue_name}
                     className={`w-20 h-20 rounded-2xl object-cover shrink-0 border shadow-md ${
                       isDark ? "border-white/5" : "border-zinc-100"
                     }`}
                   />
-                  
+
                   <div className="space-y-1 pr-1 w-full min-w-0">
                     <h2 className={`text-base font-bold tracking-wide truncate ${
                       isDark ? "text-white" : "text-zinc-900"
-                    }`}>Rest One</h2>
-                    
-                    {/* Distance & Status info */}
+                    }`}>{booking.venue_name}</h2>
+
                     <div className={`flex items-center gap-1.5 text-xs font-medium ${
                       isDark ? "text-white/50" : "text-zinc-500"
                     }`}>
-                      <MapPin className="h-3.5 w-3.5 shrink-0 text-zinc-400" />
-                      <span>1 km</span>
-                      <span className={isDark ? "text-white/20" : "text-zinc-300"}>|</span>
-                      <span className="w-1.5 h-1.5 rounded-full bg-[#10B981] shrink-0" />
-                      <span className="text-[#10B981] font-bold">Ochiq</span>
+                      <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${badge.dot}`} />
+                      <span className={`font-bold ${badge.text}`}>{badge.label}</span>
                     </div>
 
-                    {/* Phone */}
                     <div className={`flex items-center gap-1.5 text-xs font-medium ${
                       isDark ? "text-white/60" : "text-zinc-600"
                     }`}>
-                      <Phone className={`h-3.5 w-3.5 shrink-0 ${isDark ? "text-white/40" : "text-zinc-400"}`} />
-                      <span>+998 99 123 45 67</span>
+                      <Clock className={`h-3.5 w-3.5 shrink-0 ${isDark ? "text-white/40" : "text-zinc-400"}`} />
+                      <span>{booking.guests_count} mehmon</span>
                     </div>
 
-                    {/* Address */}
                     <div className={`flex items-center gap-1.5 text-xs font-medium truncate ${
                       isDark ? "text-white/60" : "text-zinc-600"
                     }`}>
                       <MapPin className={`h-3.5 w-3.5 shrink-0 ${isDark ? "text-white/40" : "text-zinc-400"}`} />
-                      <span className="truncate">Umid qo'rg'oni 765 - uy</span>
+                      <span className="truncate">
+                        {booking.kind === "hall_event" ? "Tadbir" : "Stol bandi"}
+                      </span>
                     </div>
                   </div>
                 </div>
 
-                {/* Horizontal Divider */}
                 <hr className={`border-t ${isDark ? "border-white/5" : "border-zinc-100"}`} />
 
-                {/* Booking metadata table */}
                 <div className="space-y-2.5 text-xs font-semibold">
                   <div className="flex justify-between items-center">
                     <span className={isDark ? "text-white/40" : "text-zinc-400"}>Holat</span>
-                    <span className={`font-bold ${isDark ? "text-white" : "text-zinc-900"}`}>Band qilish tasdiqlandi</span>
-                  </div>
-                  <div className="flex justify-between items-center">
-                    <span className={isDark ? "text-white/40" : "text-zinc-400"}>Chek raqami:</span>
-                    <span className={`font-mono ${isDark ? "text-white/90" : "text-zinc-900"}`}>0789 091172</span>
+                    <span className={`font-bold ${badge.text}`}>{badge.label}</span>
                   </div>
                   <div className="flex justify-between items-center">
                     <span className={isDark ? "text-white/40" : "text-zinc-400"}>Belgilandi:</span>
-                    <span className={isDark ? "text-white/90" : "text-zinc-900"}>11:00 • 26/02/2024</span>
+                    <span className={isDark ? "text-white/90" : "text-zinc-900"}>
+                      {formatTime(booking.start_time)} &bull; {formatDateNumeric(booking.booking_date)}
+                    </span>
                   </div>
+                  {booking.table_number !== null && booking.table_number !== undefined && (
+                    <div className="flex justify-between items-center">
+                      <span className={isDark ? "text-white/40" : "text-zinc-400"}>Stol raqami:</span>
+                      <span className={isDark ? "text-white/90" : "text-zinc-900"}>{booking.table_number} - stol</span>
+                    </div>
+                  )}
                   <div className="flex justify-between items-center">
-                    <span className={isDark ? "text-white/40" : "text-zinc-400"}>Stol raqami:</span>
-                    <span className={isDark ? "text-white/90" : "text-zinc-900"}>4 - stol</span>
-                  </div>
-                  <div className="flex justify-between items-center">
-                    <span className={isDark ? "text-white/40" : "text-zinc-400"}>Restoran raqami:</span>
-                    <span className={isDark ? "text-white/90" : "text-zinc-900"}>+998 99 123 45 67</span>
+                    <span className={isDark ? "text-white/40" : "text-zinc-400"}>Summa:</span>
+                    <span className={isDark ? "text-white/90" : "text-zinc-900"}>{formatUZS(booking.total_amount)}</span>
                   </div>
                 </div>
 
-                {/* Bottom orange banner with clock for Card 1 */}
-                {item.showBanner && (
+                {/* Only a booking that has not happened yet has time left on it */}
+                {(booking.status === "pending" || booking.status === "confirmed") && (
                   <div className={`w-full rounded-2xl py-3.5 px-4 flex items-center justify-between text-sm font-bold ${
-                    isDark 
-                      ? "bg-[#FF6B00] text-white shadow-md animate-pulse" 
+                    isDark
+                      ? "bg-[#FF6B00] text-white shadow-md"
                       : "bg-white border border-[#FF6B00] text-[#FF6B00]"
                   }`}>
                     <span className={isDark ? "text-white" : "text-[#FF6B00] opacity-80 font-medium"}>Qoldi:</span>
                     <div className="flex items-center gap-2">
                       <Clock className={`h-4.5 w-4.5 shrink-0 ${isDark ? "text-white" : "text-[#FF6B00]"}`} />
-                      <span>2 soat 25 daqiqa</span>
+                      <span>{timeUntil(booking.booking_date, booking.start_time)}</span>
                     </div>
                   </div>
                 )}
               </div>
-            ))}
+            );})}
           </main>
         </div>
       )}
