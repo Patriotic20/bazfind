@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
+import { useQuery } from "@tanstack/react-query";
 import {
   ChevronLeft,
   ChevronDown,
@@ -12,6 +13,8 @@ import {
 } from "lucide-react";
 import Navbar from "@/components/navbar";
 import { useTheme } from "@/components/theme-provider";
+import { geoKeys, listDistricts, listRegions } from "@/lib/api/endpoints/geo";
+import type { District, Region } from "@/lib/api/types";
 
 export default function FeedPage() {
   const { theme } = useTheme();
@@ -19,13 +22,14 @@ export default function FeedPage() {
   const [mounted, setMounted] = useState(false);
   const [showLocationSelect, setShowLocationSelect] = useState(false);
   const [currentLocation, setCurrentLocation] = useState("Toshkent");
-  
-  // Location States
-  const [selectedRegion, setSelectedRegion] = useState("");
-  const [selectedDistrict, setSelectedDistrict] = useState("");
+
+  // Location States. Whole rows rather than names: districts are fetched by
+  // `region_id`, and district names repeat across regions.
+  const [selectedRegion, setSelectedRegion] = useState<Region | null>(null);
+  const [selectedDistrict, setSelectedDistrict] = useState<District | null>(null);
   const [isRegionDropdownOpen, setIsRegionDropdownOpen] = useState(false);
   const [isDistrictDropdownOpen, setIsDistrictDropdownOpen] = useState(false);
-  
+
   const [toastMessage, setToastMessage] = useState("");
 
   useEffect(() => {
@@ -65,6 +69,21 @@ export default function FeedPage() {
     }
   }, [toastMessage]);
 
+  // Reference data seeded by a migration — 14 regions and the 209 districts
+  // under them. It changes roughly never, so it is cached for the session.
+  const regionsQuery = useQuery({
+    queryKey: geoKeys.regions(),
+    queryFn: ({ signal }) => listRegions(signal),
+    staleTime: Infinity,
+  });
+
+  const districtsQuery = useQuery({
+    queryKey: geoKeys.districts(selectedRegion?.id ?? 0),
+    queryFn: ({ signal }) => listDistricts(selectedRegion!.id, signal),
+    enabled: selectedRegion !== null,
+    staleTime: Infinity,
+  });
+
   if (!mounted) {
     return <div className="flex flex-col flex-1 bg-[var(--background)] animate-pulse" />;
   }
@@ -75,7 +94,7 @@ export default function FeedPage() {
 
   const handleConfirmLocation = () => {
     if (selectedRegion && selectedDistrict) {
-      const formattedLoc = `${selectedRegion}, ${selectedDistrict.replace(" tumani", "")}`;
+      const formattedLoc = `${selectedRegion.name}, ${selectedDistrict.name.replace(" tumani", "")}`;
       setCurrentLocation(formattedLoc);
       localStorage.setItem("feedLocation", formattedLoc);
       setShowLocationSelect(false);
@@ -83,14 +102,20 @@ export default function FeedPage() {
     }
   };
 
-  const REGIONS = ["Toshkent", "Navoiy", "Samarqand", "Buxoro"];
-  const DISTRICTS_MAP: Record<string, string[]> = {
-    "Toshkent": ["Yashnobod tumani", "Olmazor tumani", "Mirzo Ulug'bek tumani", "Toshkent shahri", "Yunusobod tumani", "Chilonzor tumani"],
-    "Navoiy": ["Navoiy shahri", "Karmana tumani", "Qiziltepa tumani", "Xatirchi tumani", "Nurota tumani"],
-    "Samarqand": ["Samarqand shahri", "Bulung'ur tumani", "Jomboy tumani", "Urgut tumani", "Payariq tumani", "Ishtixon tumani"],
-    "Buxoro": ["Buxoro shahri", "Gijduvon tumani", "Kogon tumani", "Qorako'l tumani", "Vobkent tumani", "Shofirkon tumani"]
+  const regions = regionsQuery.data ?? [];
+  const districts = districtsQuery.data ?? [];
+
+  /** Placeholder row for a dropdown that is loading, failed, or came back empty. */
+  const dropdownNotice = (
+    isLoading: boolean,
+    isError: boolean,
+    isEmpty: boolean,
+  ): string | null => {
+    if (isLoading) return "Yuklanmoqda...";
+    if (isError) return "Ma'lumotni yuklab bo'lmadi";
+    if (isEmpty) return "Hech narsa topilmadi";
+    return null;
   };
-  const districts = selectedRegion ? (DISTRICTS_MAP[selectedRegion] || []) : [];
 
   return (
     <div
@@ -140,7 +165,7 @@ export default function FeedPage() {
                         : "border-zinc-200 bg-zinc-100 text-zinc-900 hover:border-zinc-300"
                     }`}
                   >
-                    <span>{selectedRegion || "Belgilash"}</span>
+                    <span>{selectedRegion?.name || "Belgilash"}</span>
                     <ChevronDown
                       className={`h-4.5 w-4.5 transition-transform duration-300 ${
                         isDark ? "text-white/40" : "text-zinc-400"
@@ -153,24 +178,40 @@ export default function FeedPage() {
                     <div className={`absolute left-0 right-0 mt-2 z-30 border rounded-2xl shadow-2xl overflow-hidden py-1 max-h-56 overflow-y-auto ${
                       isDark ? "bg-[#393939] border-white/5" : "bg-white border-zinc-200"
                     }`}>
-                      {REGIONS.map((region) => (
-                        <button
-                          key={region}
-                          type="button"
-                          onClick={() => {
-                            setSelectedRegion(region);
-                            setSelectedDistrict(""); // Reset district
-                            setIsRegionDropdownOpen(false);
-                          }}
-                          className={`w-full px-5 py-3.5 text-left text-xs font-bold transition-colors border-b last:border-b-0 ${
-                            isDark
-                              ? "text-white/90 hover:bg-white/5 active:bg-white/10 border-white/5"
-                              : "text-zinc-800 hover:bg-zinc-50 active:bg-zinc-100 border-zinc-100"
-                          }`}
-                        >
-                          {region}
-                        </button>
-                      ))}
+                      {dropdownNotice(
+                        regionsQuery.isPending,
+                        regionsQuery.isError,
+                        regions.length === 0,
+                      ) ? (
+                        <div className={`px-5 py-3.5 text-xs font-bold ${
+                          isDark ? "text-white/50" : "text-zinc-400"
+                        }`}>
+                          {dropdownNotice(
+                            regionsQuery.isPending,
+                            regionsQuery.isError,
+                            regions.length === 0,
+                          )}
+                        </div>
+                      ) : (
+                        regions.map((region) => (
+                          <button
+                            key={region.id}
+                            type="button"
+                            onClick={() => {
+                              setSelectedRegion(region);
+                              setSelectedDistrict(null); // Reset district
+                              setIsRegionDropdownOpen(false);
+                            }}
+                            className={`w-full px-5 py-3.5 text-left text-xs font-bold transition-colors border-b last:border-b-0 ${
+                              isDark
+                                ? "text-white/90 hover:bg-white/5 active:bg-white/10 border-white/5"
+                                : "text-zinc-800 hover:bg-zinc-50 active:bg-zinc-100 border-zinc-100"
+                            }`}
+                          >
+                            {region.name}
+                          </button>
+                        ))
+                      )}
                     </div>
                   )}
                 </div>
@@ -197,7 +238,7 @@ export default function FeedPage() {
                         : "opacity-40 cursor-not-allowed"
                     }`}
                   >
-                    <span>{selectedDistrict || "Belgilash"}</span>
+                    <span>{selectedDistrict?.name || "Belgilash"}</span>
                     <ChevronDown
                       className={`h-4.5 w-4.5 transition-transform duration-300 ${
                         isDark ? "text-white/40" : "text-zinc-400"
@@ -210,23 +251,39 @@ export default function FeedPage() {
                     <div className={`absolute left-0 right-0 mt-2 z-30 border rounded-2xl shadow-2xl overflow-hidden py-1 max-h-56 overflow-y-auto ${
                       isDark ? "bg-[#393939] border-white/5" : "bg-white border-zinc-200"
                     }`}>
-                      {districts.map((district) => (
-                        <button
-                          key={district}
-                          type="button"
-                          onClick={() => {
-                            setSelectedDistrict(district);
-                            setIsDistrictDropdownOpen(false);
-                          }}
-                          className={`w-full px-5 py-3.5 text-left text-xs font-bold transition-colors border-b last:border-b-0 ${
-                            isDark
-                              ? "text-white/90 hover:bg-white/5 active:bg-white/10 border-white/5"
-                              : "text-zinc-800 hover:bg-zinc-50 active:bg-zinc-100 border-zinc-100"
-                          }`}
-                        >
-                          {district}
-                        </button>
-                      ))}
+                      {dropdownNotice(
+                        districtsQuery.isPending,
+                        districtsQuery.isError,
+                        districts.length === 0,
+                      ) ? (
+                        <div className={`px-5 py-3.5 text-xs font-bold ${
+                          isDark ? "text-white/50" : "text-zinc-400"
+                        }`}>
+                          {dropdownNotice(
+                            districtsQuery.isPending,
+                            districtsQuery.isError,
+                            districts.length === 0,
+                          )}
+                        </div>
+                      ) : (
+                        districts.map((district) => (
+                          <button
+                            key={district.id}
+                            type="button"
+                            onClick={() => {
+                              setSelectedDistrict(district);
+                              setIsDistrictDropdownOpen(false);
+                            }}
+                            className={`w-full px-5 py-3.5 text-left text-xs font-bold transition-colors border-b last:border-b-0 ${
+                              isDark
+                                ? "text-white/90 hover:bg-white/5 active:bg-white/10 border-white/5"
+                                : "text-zinc-800 hover:bg-zinc-50 active:bg-zinc-100 border-zinc-100"
+                            }`}
+                          >
+                            {district.name}
+                          </button>
+                        ))
+                      )}
                     </div>
                   )}
                 </div>
@@ -267,8 +324,8 @@ export default function FeedPage() {
             {/* Location selector trigger button */}
             <button
               onClick={() => {
-                setSelectedRegion("");
-                setSelectedDistrict("");
+                setSelectedRegion(null);
+                setSelectedDistrict(null);
                 setIsRegionDropdownOpen(false);
                 setIsDistrictDropdownOpen(false);
                 setShowLocationSelect(true);
