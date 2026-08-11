@@ -60,6 +60,25 @@ export function formatTime(value: string): string {
   return value.slice(0, 5);
 }
 
+/**
+ * The next date falling on a named weekday, as `YYYY-MM-DD`.
+ *
+ * The pickers offer relative weekday labels ("Jum"), and the booking endpoints
+ * take a calendar date. Passing the label straight through is what left the
+ * booking screen with no date selected: it compares against day-of-month.
+ */
+export function nextDateForWeekday(label: string, from: Date = new Date()): string {
+  const target = WEEKDAYS.indexOf(label);
+  if (target < 0) return toApiDate(from);
+
+  // `getDay()` is Sunday-first; `WEEKDAYS` is Monday-first, as the API is.
+  const todayMondayFirst = (from.getDay() + 6) % 7;
+  const ahead = (target - todayMondayFirst + 7) % 7;
+  const date = new Date(from);
+  date.setDate(from.getDate() + ahead);
+  return toApiDate(date);
+}
+
 /** Today as `YYYY-MM-DD` in local time — the format every booking endpoint takes. */
 export function toApiDate(date: Date): string {
   const month = String(date.getMonth() + 1).padStart(2, "0");

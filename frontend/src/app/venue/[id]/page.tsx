@@ -1,9 +1,21 @@
 "use client";
 
 import React, { use, useState, useEffect, useRef } from "react";
-import Link from "next/link";
 import { notFound, useRouter } from "next/navigation";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTheme } from "@/components/theme-provider";
+import {
+  getVenue,
+  listVenueMenu,
+  listVenueReviews,
+  venueKeys,
+} from "@/lib/api/endpoints/venues";
+import { bookingKeys, listMyBookings } from "@/lib/api/endpoints/bookings";
+import { createReview } from "@/lib/api/endpoints/reviews";
+import { hasSession } from "@/lib/api/auth-tokens";
+import { formatUZS, formatRating, parseMoney } from "@/lib/api/money";
+import { formatDate, nextDateForWeekday } from "@/lib/format";
+import { ApiError } from "@/lib/api/types";
 import {
   ChevronLeft,
   Share2,
@@ -13,7 +25,6 @@ import {
   Compass,
   MapPin,
   Search,
-  Star,
   CheckCircle,
   Wallet,
   Plus,
@@ -25,122 +36,21 @@ interface Props {
   params: Promise<{ id: string }>;
 }
 
-const VENUES_DATA: Record<string, {
-  name: string;
-  location: string;
-  rating: string;
-  reviews: string;
-  image: string;
-  distance: string;
-  isDeposit: boolean;
-  hasDiscount: boolean;
-  gallery: string[];
-}> = {
-  "1": {
-    name: "Sayqal",
-    location: "Umid qo'rg'oni 765 - uy",
-    rating: "4.8",
-    reviews: "128 ta sharh",
-    image: "/images/home/tuyxona1.png",
-    distance: "2 km uzoqda",
-    isDeposit: false,
-    hasDiscount: true,
-    gallery: [
-      "/images/home/rest1.png",
-      "/images/home/rest2.png",
-      "/images/home/rest3.png",
-      "/images/home/rest4.png",
-      "/images/home/rest5.png",
-      "/images/home/rest6.png"
-    ]
-  },
-  "2": {
-    name: "Tinchlik",
-    location: "Umid qo'rg'oni 765 - uy",
-    rating: "4.8",
-    reviews: "214 ta sharh",
-    image: "/images/home/tuyxona2.png",
-    distance: "2 km uzoqda",
-    isDeposit: true,
-    hasDiscount: false,
-    gallery: [
-      "/images/home/rest1.png",
-      "/images/home/rest2.png",
-      "/images/home/rest3.png",
-      "/images/home/rest4.png",
-      "/images/home/rest5.png",
-      "/images/home/rest6.png"
-    ]
-  },
-  "3": {
-    name: "Rest One",
-    location: "Navoiy, O'zbekiston ko'chasi 27 - uy",
-    rating: "4.8",
-    reviews: "356 ta sharh",
-    image: "/images/home/top.png",
-    distance: "1 km uzoqda",
-    isDeposit: true,
-    hasDiscount: true,
-    gallery: [
-      "/images/home/rest1.png",
-      "/images/home/rest2.png",
-      "/images/home/rest3.png",
-      "/images/home/rest4.png",
-      "/images/home/rest5.png",
-      "/images/home/rest6.png"
-    ]
-  },
-  "4": {
-    name: "Panorama",
-    location: "Umid qo'rg'oni 765 - uy",
-    rating: "4.8",
-    reviews: "185 ta sharh",
-    image: "/images/home/tuyxona3.png",
-    distance: "2 km uzoqda",
-    isDeposit: true,
-    hasDiscount: true,
-    gallery: [
-      "/images/home/rest1.png",
-      "/images/home/rest2.png",
-      "/images/home/rest3.png",
-      "/images/home/rest4.png",
-      "/images/home/rest5.png",
-      "/images/home/rest6.png"
-    ]
-  },
-  "5": {
-    name: "Sharqona",
-    location: "Umid qo'rg'oni 765 - uy",
-    rating: "4.8",
-    reviews: "95 ta sharh",
-    image: "/images/home/tuyxona4.png",
-    distance: "2 km uzoqda",
-    isDeposit: false,
-    hasDiscount: true,
-    gallery: [
-      "/images/home/rest1.png",
-      "/images/home/rest2.png",
-      "/images/home/rest3.png",
-      "/images/home/rest4.png",
-      "/images/home/rest5.png",
-      "/images/home/rest6.png"
-    ]
-  }
-};
-
 export default function VenueDetailPage({ params }: Props) {
   const router = useRouter();
   const { id } = use(params);
-  const venue = VENUES_DATA[id] || VENUES_DATA["3"]; // fallback to Rest One
+  const venueId = Number(id);
   const { theme } = useTheme();
   const isDark = theme === "dark";
 
-  const [activeImage, setActiveImage] = useState(venue.image);
+  const [activePhoto, setActivePhoto] = useState(0);
   const [isSaved, setIsSaved] = useState(false);
   const [toastMessage, setToastMessage] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
-  const [selectedItems, setSelectedItems] = useState<Record<string, number>>({});
-  
+  // Keyed by menu item id. Keying by name broke the moment two branches of the
+  // same chain listed a dish at different prices.
+  const [selectedItems, setSelectedItems] = useState<Record<number, number>>({});
+
   // Interactive party/time picker state (2-rasm)
   const [showPartySheet, setShowPartySheet] = useState(false);
   const [showLocationSearch, setShowLocationSearch] = useState(false);
@@ -240,78 +150,49 @@ export default function VenueDetailPage({ params }: Props) {
     }
   }, [showPartySheet]);
 
-  const FOODS = [
-    { name: "Jizz", img: "/images/home/food1.png", price: "500 000 so'm", priceVal: 500000 },
-    { name: "Qozon kabob", img: "/images/home/food2.png", price: "300 000 so'm", priceVal: 300000 },
-    { name: "Manti", img: "/images/home/food3.png", price: "100 000 so'm", priceVal: 100000 },
-    { name: "Stake", img: "/images/home/food4.png", price: "180 000 so'm", priceVal: 180000 },
-    { name: "Tandir go'sht", img: "/images/home/top.png", price: "250 000 so'm", priceVal: 250000 },
-    { name: "Somsa", img: "/images/home/tuyxona1.png", price: "15 000 so'm", priceVal: 15000 }
-  ];
+  const venueQuery = useQuery({
+    queryKey: venueKeys.detail(venueId),
+    queryFn: ({ signal }) => getVenue(venueId, signal),
+    enabled: Number.isInteger(venueId) && venueId > 0,
+    retry: (count, error) => !(error instanceof ApiError && error.status < 500) && count < 2,
+  });
 
-  const handleAddItem = (name: string) => {
+  const menuQuery = useQuery({
+    queryKey: venueKeys.menu(venueId),
+    queryFn: ({ signal }) => listVenueMenu(venueId, undefined, signal),
+    enabled: Number.isInteger(venueId) && venueId > 0,
+  });
+
+  const reviewsQuery = useQuery({
+    queryKey: venueKeys.reviews(venueId),
+    queryFn: ({ signal }) => listVenueReviews(venueId, 20, 0, signal),
+    enabled: Number.isInteger(venueId) && venueId > 0,
+  });
+
+  const detail = venueQuery.data;
+  const photos = detail?.photos ?? [];
+  const menuItems = menuQuery.data ?? [];
+  const reviews = reviewsQuery.data?.items ?? [];
+  const reviewsTotal = reviewsQuery.data?.total ?? 0;
+
+  const handleAddItem = (itemId: number) => {
     setSelectedItems(prev => ({
       ...prev,
-      [name]: (prev[name] || 0) + 1
+      [itemId]: (prev[itemId] || 0) + 1
     }));
   };
 
-  const cartTotal = Object.entries(selectedItems).reduce((sum, [name, qty]) => {
-    const item = FOODS.find(f => f.name === name);
-    return sum + (item ? item.priceVal * qty : 0);
+  const cartTotal = Object.entries(selectedItems).reduce((sum, [itemId, qty]) => {
+    const item = menuItems.find(f => f.id === Number(itemId));
+    // `effective_price` already has any branch override and discount applied —
+    // it is the number the backend will charge.
+    return sum + (item ? parseMoney(item.effective_price) * qty : 0);
   }, 0);
 
-  const formatPrice = (val: number) => {
-    return val.toString().replace(/\B(?=(\d{3})+(?!\d))/g, " ") + " so'm";
-  };
   const [showReviews, setShowReviews] = useState(false);
   const [newReviewText, setNewReviewText] = useState("");
-  const [userName, setUserName] = useState("Shahzod");
-  const [reviewsList, setReviewsList] = useState([
-    {
-      author: "KaiB",
-      avatar: "/images/home/rest1.png",
-      date: "22 Jul",
-      isVerified: true,
-      rating: 5,
-      text: "KaiB was amazing with our cats!! 🌟🌟🌟 This was our first time using a pet-sitting service, so we were naturally quite anxious. We took a chance on Kai and completely lucked out! We booked Kai to come twice a day for three days."
-    },
-    {
-      author: "Shahzod",
-      avatar: "/images/home/rest2.png",
-      date: "20 Jul",
-      isVerified: true,
-      rating: 5,
-      text: "Menga bu joy juda yoqdi! Taomlari shirin, xizmat ko'rsatish darajasi juda yuqori. Hammaga tavsiya qilaman! 🌟"
-    },
-    {
-      author: "Malika",
-      avatar: "/images/home/rest3.png",
-      date: "18 Jul",
-      isVerified: true,
-      rating: 5,
-      text: "Ajoyib muhit va shinam joy. Oilaviy o'tirishlar uchun juda mos keladi. Kelajakda yana albatta kelamiz."
-    },
-    {
-      author: "Olim",
-      avatar: "/images/home/rest4.png",
-      date: "10 Jul",
-      isVerified: true,
-      rating: 4,
-      text: "Xizmat ko'rsatish a'lo darajada. Taomlari ham lazzatli. Faqat sal kechroq tayyor bo'ldi, lekin kutishga arziydi."
-    }
-  ]);
-
-  useEffect(() => {
-    setActiveImage(venue.image);
-  }, [venue]);
-
-  useEffect(() => {
-    const name = localStorage.getItem("fullName");
-    if (name) {
-      setUserName(name);
-    }
-  }, []);
+  const [newReviewRating, setNewReviewRating] = useState(5);
+  const queryClient = useQueryClient();
 
   useEffect(() => {
     const bottomNav = document.getElementById("global-bottom-nav");
@@ -348,24 +229,53 @@ export default function VenueDetailPage({ params }: Props) {
     if (showReviews) {
       scrollToBottom();
     }
-  }, [reviewsList, showReviews]);
+  }, [reviews, showReviews]);
+
+  /**
+   * A review needs a booking to attach to.
+   *
+   * The endpoint takes a `booking_id`, not a venue id, and refuses a second
+   * review for the same booking — so the form is only offered to someone who
+   * actually visited. A signed-out visitor gets a 401 here, which is the same
+   * answer as "no eligible booking" for this screen's purposes.
+   */
+  const eligibleQuery = useQuery({
+    queryKey: bookingKeys.mine(["completed"]),
+    queryFn: ({ signal }) => listMyBookings(["completed"], signal),
+    // Signed out, there is nothing to ask: the answer is a 401 either way, and
+    // asking anyway puts a red line in everyone's console on every page view.
+    enabled: hasSession(),
+    retry: false,
+  });
+
+  const eligibleBooking = (eligibleQuery.data ?? []).find(
+    (booking) => booking.venue_id === venueId,
+  );
+
+  const reviewMutation = useMutation({
+    mutationFn: (input: { booking_id: number; rating: number; comment: string }) =>
+      createReview(input),
+    onSuccess: () => {
+      setNewReviewText("");
+      setNewReviewRating(5);
+      setToastMessage("Sharhingiz muvaffaqiyatli qo'shildi!");
+      void queryClient.invalidateQueries({ queryKey: venueKeys.reviews(venueId) });
+      void queryClient.invalidateQueries({ queryKey: venueKeys.detail(venueId) });
+    },
+    onError: (error) => {
+      setToastMessage(error instanceof ApiError ? error.message : "Sharh yuborilmadi");
+    },
+  });
 
   const handleSendReview = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newReviewText.trim()) return;
+    if (!newReviewText.trim() || !eligibleBooking) return;
 
-    const newRev = {
-      author: userName,
-      avatar: "/images/home/rest6.png",
-      date: "Hozir",
-      isVerified: true,
-      rating: 5,
-      text: newReviewText.trim()
-    };
-
-    setReviewsList([...reviewsList, newRev]);
-    setNewReviewText("");
-    setToastMessage("Sharhingiz muvaffaqiyatli qo'shildi!");
+    reviewMutation.mutate({
+      booking_id: eligibleBooking.id,
+      rating: newReviewRating,
+      comment: newReviewText.trim(),
+    });
   };
 
   // Toast auto-dismiss helper
@@ -386,6 +296,68 @@ export default function VenueDetailPage({ params }: Props) {
     setToastMessage("Havola buferga nusxalandi!");
   };
 
+  /**
+   * The link to the booking screen.
+   *
+   * `date` is an ISO calendar date, not the weekday label the picker shows. The
+   * booking screen compares against day-of-month, so passing "Jum" through left
+   * it with nothing selected — the two screens had never agreed on a format.
+   */
+  const bookingHref = (location: string) => {
+    const query = new URLSearchParams({
+      total: String(cartTotal),
+      guests: String(partySize),
+      date: nextDateForWeekday(selectedDay),
+      time: selectedTime,
+      location,
+      items: JSON.stringify(selectedItems),
+    });
+    return `/booking/${venueId}?${query.toString()}`;
+  };
+
+  // An unknown id is a 404, not a silent substitution. The old code fell back to
+  // a hardcoded venue, so a bad link showed the wrong restaurant convincingly.
+  if (venueQuery.isError && venueQuery.error instanceof ApiError && venueQuery.error.status === 404) {
+    notFound();
+  }
+
+  if (venueQuery.isPending || !detail) {
+    return (
+      <div className={`flex flex-col flex-1 min-h-screen ${isDark ? "bg-[var(--background)]" : "bg-white"}`}>
+        <div className={`w-full h-[280px] animate-pulse ${isDark ? "bg-[#393939]" : "bg-zinc-100"}`} />
+        <div className="px-6 py-6 space-y-4">
+          <div className={`h-8 w-2/3 rounded-xl animate-pulse ${isDark ? "bg-[#393939]" : "bg-zinc-100"}`} />
+          <div className={`h-4 w-1/2 rounded-lg animate-pulse ${isDark ? "bg-[#393939]" : "bg-zinc-100"}`} />
+          <div className={`h-40 w-full rounded-2xl animate-pulse ${isDark ? "bg-[#393939]" : "bg-zinc-100"}`} />
+        </div>
+      </div>
+    );
+  }
+
+  if (venueQuery.isError) {
+    return (
+      <div className={`flex flex-col flex-1 min-h-screen items-center justify-center gap-4 px-8 text-center ${
+        isDark ? "bg-[var(--background)] text-white" : "bg-white text-zinc-900"
+      }`}>
+        <p className="text-sm font-bold">Muassasa ma&apos;lumotini yuklab bo&apos;lmadi</p>
+        <button
+          type="button"
+          onClick={() => venueQuery.refetch()}
+          className="px-6 py-3 rounded-2xl bg-[#FF6B00] text-white text-xs font-bold"
+        >
+          Qayta urinish
+        </button>
+      </div>
+    );
+  }
+
+  const venue = detail.venue;
+  const coverUrl = photos[activePhoto]?.url ?? photos[0]?.url ?? "/images/restaurant.png";
+  const address = `${venue.street} ${venue.house_number}`;
+  const filteredMenu = menuItems.filter((item) =>
+    item.name.toLowerCase().includes(searchQuery.toLowerCase()),
+  );
+
   return (
     <div className={`flex flex-col flex-1 bg-[var(--background)] min-h-screen relative ${
       isDark ? "text-white" : "text-zinc-900"
@@ -401,7 +373,7 @@ export default function VenueDetailPage({ params }: Props) {
       {/* Cinematic Top Image Section */}
       <div className="relative w-full h-[280px] bg-zinc-900 border-b border-white/5 overflow-hidden">
         <img
-          src={activeImage}
+          src={coverUrl}
           alt={venue.name}
           className="w-full h-full object-cover"
         />
@@ -441,29 +413,30 @@ export default function VenueDetailPage({ params }: Props) {
         </div>
 
         {/* Bottom Small Image Gallery previews inside overlay */}
-        <div className="absolute bottom-4 left-6 right-6 z-20 flex justify-center">
-          <div className="bg-white/95 rounded-[18px] p-[5px] flex gap-[6px] items-center shadow-[0_8px_30px_rgba(0,0,0,0.16)] border border-white/40 max-w-[340px] overflow-x-auto scrollbar-none">
-            {venue.gallery.map((thumb, idx) => {
-              const isSel = activeImage === thumb;
-              return (
+        {photos.length > 1 && (
+          <div className="absolute bottom-4 left-6 right-6 z-20 flex justify-center">
+            <div className="bg-white/95 rounded-[18px] p-[5px] flex gap-[6px] items-center shadow-[0_8px_30px_rgba(0,0,0,0.16)] border border-white/40 max-w-[340px] overflow-x-auto scrollbar-none">
+              {photos.map((photo, idx) => (
                 <button
-                  key={idx}
+                  key={photo.id}
                   type="button"
-                  onClick={() => setActiveImage(thumb)}
+                  onClick={() => setActivePhoto(idx)}
                   className={`w-11 h-11 rounded-[12px] overflow-hidden shrink-0 transition-all duration-300 cursor-pointer ${
-                    isSel ? "border-2 border-[#FF6B00] scale-105" : "border-0 opacity-80 hover:opacity-100"
+                    // Compared by position, not by URL: the same photo served
+                    // through a resizing CDN would never match itself.
+                    activePhoto === idx ? "border-2 border-[#FF6B00] scale-105" : "border-0 opacity-80 hover:opacity-100"
                   }`}
                 >
                   <img
-                    src={thumb}
+                    src={photo.url}
                     alt={`Gallery ${idx + 1}`}
                     className="w-full h-full object-cover"
                   />
                 </button>
-              );
-            })}
+              ))}
+            </div>
           </div>
-        </div>
+        )}
       </div>
 
       {/* Main Details Body */}
@@ -472,11 +445,15 @@ export default function VenueDetailPage({ params }: Props) {
         {/* Info detail block */}
         <div className="space-y-4">
           <div className="flex items-center justify-between gap-4">
-            {/* 10% discount green pill */}
-            <div className="flex items-center gap-1.5 bg-green-500/10 border border-green-500/20 text-[#10B981] font-bold rounded-lg px-2.5 py-1 text-xs">
-              <Percent className="h-3.5 w-3.5" />
-              <span>10% chegirma</span>
-            </div>
+            {/* Discount pill — only when the venue actually offers one */}
+            {venue.discount_percent && parseMoney(venue.discount_percent) > 0 ? (
+              <div className="flex items-center gap-1.5 bg-green-500/10 border border-green-500/20 text-[#10B981] font-bold rounded-lg px-2.5 py-1 text-xs">
+                <Percent className="h-3.5 w-3.5" />
+                <span>{formatRating(venue.discount_percent)}% chegirma</span>
+              </div>
+            ) : (
+              <span />
+            )}
 
             {/* Rating row link */}
             <button
@@ -487,7 +464,7 @@ export default function VenueDetailPage({ params }: Props) {
               }`}
             >
               <span className="text-[#FFB800]">★</span>
-              <span>{venue.rating} ({reviewsList.length} ta sharh)</span>
+              <span>{formatRating(venue.rating_avg)} ({venue.reviews_count} ta sharh)</span>
               <ChevronRight className="h-4 w-4 text-[#FFB800]" />
             </button>
           </div>
@@ -495,23 +472,25 @@ export default function VenueDetailPage({ params }: Props) {
           {/* Restaurant Title & Status */}
           <div className="flex items-start justify-between">
             <h2 className={`text-2xl font-black tracking-tight ${isDark ? "text-white" : "text-black"}`}>{venue.name}</h2>
-            <div className="flex items-center gap-1.5 text-xs text-[#10B981] font-bold pt-2">
-              <span className="w-1.5 h-1.5 rounded-full bg-[#10B981]" />
-              <span>Ochiq</span>
+            <div className={`flex items-center gap-1.5 text-xs font-bold pt-2 ${
+              detail.is_open_now ? "text-[#10B981]" : "text-zinc-400"
+            }`}>
+              <span className={`w-1.5 h-1.5 rounded-full ${detail.is_open_now ? "bg-[#10B981]" : "bg-zinc-400"}`} />
+              <span>{detail.is_open_now ? "Ochiq" : "Yopiq"}</span>
             </div>
           </div>
 
-          {/* Distance Row */}
+          {/* Phone row — the detail response has no distance, only search does */}
           <div className="flex justify-between items-center">
             <div className={`flex items-center gap-2 text-xs font-semibold ${
               isDark ? "text-white/70" : "text-zinc-600"
             }`}>
               <Compass className={`h-4 w-4 ${isDark ? "text-white/40" : "text-zinc-455"}`} />
-              <span>{venue.distance}</span>
+              <span>{venue.phone}</span>
             </div>
 
             {/* Deposit Badges */}
-            {venue.isDeposit && (
+            {venue.requires_deposit && (
               <div className="flex items-center gap-1 bg-green-500/10 border border-green-500/20 text-[#10B981] font-bold rounded-lg px-2.5 py-1 text-[10px] uppercase tracking-wider">
                 <Wallet className="h-3.5 w-3.5 shrink-0" />
                 <span>Depozitlik</span>
@@ -524,7 +503,7 @@ export default function VenueDetailPage({ params }: Props) {
             isDark ? "text-white/50" : "text-zinc-600"
           }`}>
             <MapPin className={`h-4 w-4 shrink-0 ${isDark ? "text-white/30" : "text-zinc-400"}`} />
-            <span>{venue.location}</span>
+            <span>{address}</span>
           </div>
         </div>
 
@@ -539,7 +518,7 @@ export default function VenueDetailPage({ params }: Props) {
 
           {/* Menu Count bar */}
           <div className="flex justify-between items-center text-xs font-bold">
-            <span className={isDark ? "text-white/90" : "text-zinc-850"}>{`Menu (${FOODS.length * 14 + 2} mahsulot)`}</span>
+            <span className={isDark ? "text-white/90" : "text-zinc-850"}>{`Menu (${menuItems.length} mahsulot)`}</span>
             <button className={`transition-colors ${isDark ? "text-white/40 hover:text-white/60" : "text-primary hover:text-primary-hover"}`}>
               Menyuni ko'rish
             </button>
@@ -567,11 +546,11 @@ export default function VenueDetailPage({ params }: Props) {
 
           {/* Food Grid Display */}
           <div className="grid grid-cols-2 gap-4 pt-1">
-            {FOODS.filter(f => f.name.toLowerCase().includes(searchQuery.toLowerCase())).map((food, idx) => {
-              const qty = selectedItems[food.name] || 0;
+            {filteredMenu.map((food) => {
+              const qty = selectedItems[food.id] || 0;
               return (
                 <div
-                  key={idx}
+                  key={food.id}
                   className={`border rounded-3xl p-3 flex flex-col gap-3 relative text-left animate-fade-in ${
                     isDark 
                       ? "bg-[#393939] border-white/5 shadow-lg" 
@@ -583,7 +562,7 @@ export default function VenueDetailPage({ params }: Props) {
                     isDark ? "border-white/5 bg-zinc-800" : "border-zinc-100 bg-zinc-50"
                   }`}>
                     <img
-                      src={food.img}
+                      src={food.photo_url ?? "/images/restaurant.png"}
                       alt={food.name}
                       className="w-full h-full object-cover"
                     />
@@ -596,8 +575,8 @@ export default function VenueDetailPage({ params }: Props) {
                           onClick={() => {
                             setSelectedItems(prev => {
                               const next = { ...prev };
-                              if (next[food.name] > 1) next[food.name]--;
-                              else delete next[food.name];
+                              if (next[food.id] > 1) next[food.id]--;
+                              else delete next[food.id];
                               return next;
                             });
                           }}
@@ -608,7 +587,7 @@ export default function VenueDetailPage({ params }: Props) {
                         <span className="text-xs font-bold text-zinc-955 select-none min-w-[8px] text-center">{qty}</span>
                         <button
                           type="button"
-                          onClick={() => handleAddItem(food.name)}
+                          onClick={() => handleAddItem(food.id)}
                           className="w-5 h-5 flex items-center justify-center font-black text-xs text-zinc-500 hover:text-black cursor-pointer active:scale-80 transition-all"
                         >
                           <Plus className="h-3 w-3 stroke-[3]" />
@@ -617,7 +596,7 @@ export default function VenueDetailPage({ params }: Props) {
                     ) : (
                       <button
                         type="button"
-                        onClick={() => handleAddItem(food.name)}
+                        onClick={() => handleAddItem(food.id)}
                         className={`absolute bottom-2 right-2 w-8 h-8 rounded-full shadow-md flex items-center justify-center font-bold hover:scale-105 active:scale-95 transition-all z-10 ${
                           isDark ? "bg-[#FF6B00] text-white" : "bg-white border border-zinc-200 text-zinc-950 cursor-pointer"
                         }`}
@@ -629,13 +608,13 @@ export default function VenueDetailPage({ params }: Props) {
 
                   {/* Details */}
                   <div className="space-y-1 pr-0.5">
-                    <p className={`text-sm font-black tracking-wide ${isDark ? "text-white" : "text-zinc-955"}`}>{food.price}</p>
+                    <p className={`text-sm font-black tracking-wide ${isDark ? "text-white" : "text-zinc-955"}`}>{food.has_variants ? "Porsiyaga qarab" : formatUZS(food.effective_price)}</p>
                     <p className={`text-xs font-semibold ${isDark ? "text-white/50" : "text-zinc-500"}`}>{food.name}</p>
                   </div>
                 </div>
               );
             })}
-            {FOODS.filter(f => f.name.toLowerCase().includes(searchQuery.toLowerCase())).length === 0 && (
+            {filteredMenu.length === 0 && !menuQuery.isPending && (
               <div className={`col-span-2 py-8 text-center text-xs font-semibold ${isDark ? "text-white/40" : "text-zinc-400"}`}>
                 Mahsulot topilmadi
               </div>
@@ -653,7 +632,7 @@ export default function VenueDetailPage({ params }: Props) {
           onClick={() => setShowPartySheet(true)}
           className="w-full py-4 rounded-[24px] bg-[#FF5A00] hover:bg-[#E05000] text-white font-bold text-sm tracking-wide flex items-center justify-center gap-2 transition-all active:scale-98 shadow-lg shadow-[#FF6B00]/20 cursor-pointer"
         >
-          <span>{cartTotal > 0 ? formatPrice(cartTotal) : "Keyingisi"}</span>
+          <span>{cartTotal > 0 ? formatUZS(cartTotal) : "Keyingisi"}</span>
         </button>
       </div>
 
@@ -675,16 +654,26 @@ export default function VenueDetailPage({ params }: Props) {
               <ChevronLeft className="w-5 h-5 stroke-[2.5]" />
             </button>
             <div className={`absolute left-1/2 -translate-x-1/2 font-bold text-base tracking-wide ${isDark ? "text-white" : "text-zinc-950"}`}>
-              Sharhlar ({reviewsList.length})
+              Sharhlar ({reviewsTotal})
             </div>
             <div className="w-9" />
           </div>
 
           {/* Review Cards list container */}
           <div className="flex-1 overflow-y-auto px-6 py-6 pb-20 flex flex-col gap-4">
-            {reviewsList.map((rev, idx) => (
+            {reviewsQuery.isPending && (
+              <div className={`text-center text-xs font-bold py-8 ${isDark ? "text-white/40" : "text-zinc-400"}`}>
+                Yuklanmoqda...
+              </div>
+            )}
+            {!reviewsQuery.isPending && reviews.length === 0 && (
+              <div className={`text-center text-xs font-bold py-8 ${isDark ? "text-white/40" : "text-zinc-400"}`}>
+                Hozircha sharhlar yo&apos;q
+              </div>
+            )}
+            {reviews.map((rev, idx) => (
               <div
-                key={idx}
+                key={rev.id}
                 className={`border rounded-[22px] p-5 relative text-left animate-slide-up ${
                   isDark ? "bg-[#393939] border-white/5 shadow-lg" : "bg-white border-zinc-200 shadow-sm"
                 }`}
@@ -697,17 +686,17 @@ export default function VenueDetailPage({ params }: Props) {
                       isDark ? "border-white/10 bg-zinc-800" : "border-zinc-200 bg-zinc-50"
                     }`}>
                       <img
-                        src={rev.avatar}
+                        src={rev.author.avatar_url ?? "/images/profil.jpg"}
                         className="w-full h-full object-cover"
-                        alt={rev.author}
+                        alt={rev.author.first_name}
                       />
                     </div>
                     <div>
                       <div className="flex items-center gap-1.5">
-                        <span className={`text-sm font-bold tracking-wide ${isDark ? "text-white" : "text-zinc-950"}`}>{rev.author}</span>
+                        <span className={`text-sm font-bold tracking-wide ${isDark ? "text-white" : "text-zinc-950"}`}>{`${rev.author.first_name} ${rev.author.last_name}`}</span>
                         <span className="text-zinc-400 text-[10px]">•</span>
-                        <span className={`text-xs ${isDark ? "text-white/50" : "text-zinc-500"}`}>{rev.date}</span>
-                        {rev.isVerified && (
+                        <span className={`text-xs ${isDark ? "text-white/50" : "text-zinc-500"}`}>{rev.published_at ? formatDate(rev.published_at.slice(0, 10)) : ""}</span>
+                        {rev.is_verified && (
                           <span className="text-[10px] bg-primary/10 text-primary px-1.5 py-0.5 rounded-[4px] font-semibold tracking-wide ml-1">
                             Verified
                           </span>
@@ -726,7 +715,7 @@ export default function VenueDetailPage({ params }: Props) {
                 </div>
                 {/* Text Body */}
                 <p className={`text-xs font-medium leading-relaxed ${isDark ? "text-white/80" : "text-zinc-850"}`}>
-                  {rev.text}
+                  {rev.comment}
                 </p>
                 {/* Read More button */}
                 <div className="flex justify-end mt-2">
@@ -745,14 +734,33 @@ export default function VenueDetailPage({ params }: Props) {
           <div className={`absolute bottom-0 left-0 right-0 px-6 py-4 border-t pb-6 z-10 ${
             isDark ? "bg-[#333333] border-white/5" : "bg-white border-zinc-150"
           }`}>
+            {!eligibleBooking ? (
+              <p className={`text-center text-xs font-semibold py-2 ${isDark ? "text-white/40" : "text-zinc-400"}`}>
+                Sharh qoldirish uchun bu muassasada tashrifingiz yakunlangan bo&apos;lishi kerak
+              </p>
+            ) : (
             <form
               onSubmit={handleSendReview}
               className={`flex items-center rounded-full px-4 py-3.5 gap-3 border transition-all ${
-                isDark 
-                  ? "bg-[#393939] border-white/5 focus-within:border-[#FF6B00]/40" 
+                isDark
+                  ? "bg-[#393939] border-white/5 focus-within:border-[#FF6B00]/40"
                   : "bg-zinc-100 border-transparent focus-within:bg-zinc-200/50"
               }`}
             >
+              {/* The rating was hardcoded to five stars, so every review agreed. */}
+              <div className="flex items-center gap-0.5 shrink-0">
+                {[1, 2, 3, 4, 5].map((star) => (
+                  <button
+                    key={star}
+                    type="button"
+                    onClick={() => setNewReviewRating(star)}
+                    className="text-sm text-[#FFB800] cursor-pointer active:scale-90 transition-transform"
+                    aria-label={`${star} yulduz`}
+                  >
+                    {star <= newReviewRating ? "★" : "☆"}
+                  </button>
+                ))}
+              </div>
               <input
                 type="text"
                 value={newReviewText}
@@ -764,7 +772,7 @@ export default function VenueDetailPage({ params }: Props) {
               />
               <button
                 type="submit"
-                disabled={!newReviewText.trim()}
+                disabled={!newReviewText.trim() || reviewMutation.isPending}
                 className="p-1.5 rounded-full bg-transparent text-[#FF6B00] hover:scale-105 active:scale-95 disabled:opacity-40 disabled:scale-100 transition-all shrink-0 flex items-center justify-center cursor-pointer"
               >
                 <svg className="w-5.5 h-5.5 fill-current transform rotate-45 -translate-x-[2px] translate-y-[1px]" viewBox="0 0 24 24">
@@ -772,6 +780,7 @@ export default function VenueDetailPage({ params }: Props) {
                 </svg>
               </button>
             </form>
+            )}
           </div>
         </div>
       )}
@@ -950,7 +959,7 @@ export default function VenueDetailPage({ params }: Props) {
               setTimeout(() => setToastMessage(""), 3000);
               setTimeout(() => {
                 setShowLocationSearch(false);
-                router.push(`/booking/${id}?total=${cartTotal}&guests=${partySize}&date=${selectedDay}&time=${selectedTime}&location=Toshkent`);
+                router.push(bookingHref("Toshkent"));
               }, 1200);
             }}
             className={`w-full px-6 py-5 border-b flex items-center gap-3.5 transition-colors cursor-pointer text-left ${
@@ -982,7 +991,7 @@ export default function VenueDetailPage({ params }: Props) {
                     setTimeout(() => setToastMessage(""), 3000);
                     setTimeout(() => {
                       setShowLocationSearch(false);
-                      router.push(`/booking/${id}?total=${cartTotal}&guests=${partySize}&date=${selectedDay}&time=${selectedTime}&location=${encodeURIComponent(loc.name)}`);
+                      router.push(bookingHref(loc.name));
                     }, 1000);
                   }}
                   className={`w-full py-4 border-b last:border-b-0 flex items-center gap-3.5 transition-colors cursor-pointer text-left ${
