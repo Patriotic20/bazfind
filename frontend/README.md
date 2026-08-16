@@ -1,8 +1,9 @@
 # bazmly — frontend
 
-Next.js 16 App Router, Tailwind v4, Uzbek UI, mobile-first. One half of the
-bazmly repository — the other is [`../backend`](../backend), a FastAPI service
-this app consumes over HTTP and shares no code with.
+Next.js 16 App Router, Tailwind v4, Uzbek UI, mobile-first. Runs both as a
+Telegram Mini App and as an ordinary website. The API it consumes lives in
+[bazmly-backend](https://github.com/Patriotic20/bazmly-backend); the two share no
+code and meet only over HTTP.
 
 Read [AGENTS.md](AGENTS.md) before writing code: this is Next 16, and the guides
 that ship in `node_modules/next/dist/docs/` are the authority over anything
@@ -17,17 +18,25 @@ npm run dev                       # http://localhost:3000
 ```
 
 The backend has to be running, or every screen falls back to its error state.
-See [../README.md](../README.md) for bringing up the whole stack.
 
 ## Scripts
 
 | Command | What it does |
 | --- | --- |
 | `npm run dev` | dev server |
-| `npm run build` | production build (`output: "standalone"`) |
+| `npm run build` | production build |
 | `npm run lint` | eslint |
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run gen:api` | regenerate `src/lib/api/schema.d.ts` from a **running** backend |
+
+## Deploying to Railway
+
+Built by Nixpacks from [`railway.json`](railway.json); there is no Dockerfile.
+
+Set `NEXT_PUBLIC_API_URL` to the backend's public URL, ending in `/api`. It is
+inlined at **build** time, so changing it needs a redeploy, not a restart — and
+the backend's `APP_CONFIG__CORS__ORIGINS` has to name this app's domain back, or
+every request from the page fails while `curl` keeps working.
 
 ## Talking to the API
 
@@ -35,7 +44,7 @@ The browser calls the backend directly. There is no proxy and no rewrite, so two
 values have to agree:
 
 - `NEXT_PUBLIC_API_URL` here, and
-- `APP_CONFIG__CORS__ORIGINS` in `../backend/.env`.
+- `APP_CONFIG__CORS__ORIGINS` in the backend.
 
 If the page loads but every request fails while `curl` works, those two have
 drifted. `curl` is not subject to CORS.

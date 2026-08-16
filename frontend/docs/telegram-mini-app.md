@@ -27,13 +27,14 @@ Nothing below can be done from code — it all happens in a chat with
    `7123456789:AAH...`. Treat it as a password: it can both verify sign-ins and
    post as the bot.
 
-2. **Put the token in `backend/.env`:**
+2. **Put the token in the backend's environment** (`.env` locally, a service
+   variable on Railway):
 
    ```
    APP_CONFIG__TELEGRAM__BOT_TOKEN=7123456789:AAH...
    ```
 
-   Restart the backend. `backend/.env` is git-ignored; the token must never be
+   Restart the backend. The local `.env` is git-ignored; the token must never be
    committed.
 
 3. **Give the bot a Mini App URL.** Send `/newapp` (or `/myapps` for an existing
@@ -57,7 +58,7 @@ It prints a `https://<random>.trycloudflare.com` address. Two things must then
 line up, or every request from the page fails while `curl` keeps working:
 
 - give that address to BotFather as the Mini App URL;
-- add it to `APP_CONFIG__CORS__ORIGINS` in `backend/.env`, as JSON:
+- add it to `APP_CONFIG__CORS__ORIGINS` in the backend, as JSON:
   `["http://localhost:3000", "https://<random>.trycloudflare.com"]`.
 
 The frontend also needs `NEXT_PUBLIC_API_URL` pointing at a backend the phone
@@ -71,7 +72,7 @@ time, so changing it means rebuilding the frontend image, not restarting it.
 | Signs in automatically, no login screen | `src/components/telegram-provider.tsx` |
 | Follows Telegram's light/dark scheme | `src/components/theme-provider.tsx` |
 | Calls `ready()` and `expand()` on open | `src/lib/telegram/webapp.ts` |
-| Verifies the signature, creates the account | `backend/app/modules/auth/telegram.py` |
+| Verifies the signature, creates the account | `app/modules/auth/telegram.py` in [bazmly-backend](https://github.com/Patriotic20/bazmly-backend) |
 
 Outside Telegram every one of these is inert: `isInsideTelegram()` is false, the
 provider renders its children untouched, and the theme falls back to the saved
@@ -81,7 +82,7 @@ preference.
 
 Such a user has **no phone number**. `users.ck_users_phone_or_email` was widened
 to accept a Telegram id as a third form of identity — see migration
-`5ce814a7d7a3`. A booking asks for a contact number in its own payload, so this
+`5ce814a7d7a3` in the backend. A booking asks for a contact number in its own payload, so this
 does not block one, but any flow that assumes `user.phone` is present will need
 to ask for it.
 
