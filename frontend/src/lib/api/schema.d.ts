@@ -236,6 +236,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/telegram": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Telegram orqali kirish
+         * @description Mini App uchun. Telegram bergan `initData` satri o'zgartirilmagan holda yuboriladi; imzo tekshirilgach, akkaunt topiladi yoki yaratiladi. Parol ham, tasdiqlash kodi ham talab qilinmaydi.
+         */
+        post: operations["auth_telegram_login"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/complete-profile": {
         parameters: {
             query?: never;
@@ -3422,6 +3442,17 @@ export interface components {
             /** Items */
             items?: components["schemas"]["BookingItemCreate"][];
         };
+        /**
+         * TelegramLogin
+         * @description Mini App ochilganda Telegram bergan `initData` satri, o'zgartirilmagan holda.
+         *
+         *     Bu satr imzolangan, shuning uchun uni qismlarga ajratib yuborish mumkin emas:
+         *     imzo aynan shu ko'rinish uchun hisoblangan.
+         */
+        TelegramLogin: {
+            /** Init Data */
+            init_data: string;
+        };
         /** TokenPair */
         TokenPair: {
             /** Access Token */
@@ -4561,6 +4592,39 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["PhoneLogin"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TokenPair"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    auth_telegram_login: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TelegramLogin"];
             };
         };
         responses: {

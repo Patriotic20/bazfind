@@ -62,6 +62,24 @@ export async function login(phone: string, password?: string): Promise<TokenPair
   return pair;
 }
 
+/**
+ * Sign in as whoever Telegram says opened the Mini App.
+ *
+ * `initData` must be forwarded exactly as Telegram produced it — the signature
+ * covers that precise string, so re-encoding it makes the backend reject it.
+ * There is no password and no registration step: an unknown Telegram account
+ * becomes a new user on first arrival.
+ */
+export async function telegramLogin(initData: string): Promise<TokenPair> {
+  const pair = await apiFetch<TokenPair>("/v1/auth/telegram", {
+    method: "POST",
+    auth: "none",
+    body: { init_data: initData },
+  });
+  storeSession(pair);
+  return pair;
+}
+
 /** Staff sign in with an issued login, not with their phone number. */
 export async function staffLogin(userLogin: string, password: string): Promise<TokenPair> {
   const pair = await apiFetch<TokenPair>("/v1/auth/staff-login", {
