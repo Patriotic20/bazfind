@@ -1,6 +1,22 @@
 @import "tailwindcss";
 
+/* `ThemeProvider` puts `.dark` on <html>, but Tailwind v4's `dark:` variant
+   listens to the operating system's preference by default — so the 176 `dark:`
+   utilities in this app answered to the OS while everything else answered to the
+   class, and the two disagreed. Inside Telegram that showed as a white band on a
+   dark screen; on the web, where both happened to be light, it showed as nothing
+   at all. This points the variant at the class the app actually sets. */
+@custom-variant dark (&:where(.dark, .dark *));
+
 @theme {
+  /* Tailwind's `font-sans` and `font-mono` resolve to these. Without them the
+     utilities fall back to Tailwind's generic stacks and *override* the family
+     set on `body` — which is why the vouchers screen rendered in a different
+     font from every other screen, and why the Geist Mono the layout loads was
+     never actually used by the `font-mono` class. */
+  --font-sans: var(--font-plus-jakarta-sans), system-ui, -apple-system, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, monospace;
+
   --color-primary: #FF6B00;
   --color-primary-hover: #E05E00;
   --color-brand-dark: #333333;
@@ -22,6 +38,19 @@
 .dark {
   --background: #333333;
   --foreground: #F3F4F6;
+}
+
+/* Inside Telegram the app is a panel under a header, so `100vh` — what
+   `min-h-screen` and `h-screen` mean — is taller than the space it actually has,
+   and the foot of every screen falls below the fold. `--tg-app-height` is set
+   from Telegram's own figure and updated when it changes; outside Telegram the
+   class is absent and these rules never apply. */
+html.tg-app .min-h-screen {
+  min-height: var(--tg-app-height, 100vh);
+}
+
+html.tg-app .h-screen {
+  height: var(--tg-app-height, 100vh);
 }
 
 body {

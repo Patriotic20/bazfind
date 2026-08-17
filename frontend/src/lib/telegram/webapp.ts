@@ -69,3 +69,69 @@ export function bindBackButton(handler: () => void): () => void {
 export function hapticTap(): void {
   getWebApp()?.HapticFeedback.impactOccurred("light");
 }
+
+/** Why asking for a contact did not produce one. */
+export type ContactRefusal = "unsupported" | "declined";
+
+/**
+ * Ask Telegram for the user's phone number.
+ *
+ * Resolves with the signed payload to hand the backend, or with why it did not:
+ * `unsupported` when the Telegram client predates Bot API 6.9, `declined` when
+ * the user said no. Neither is an error — both are answers, and the caller shows
+ * something different for each.
+ *
+ * The signed string is passed on untouched. It is what the signature covers, so
+ * re-encoding it or picking the number out of `responseUnsafe` would throw away
+ * the only proof that Telegram, and not the page, produced this number.
+ */
+export function requestContact(): Promise<{ contactData: string } | { refused: ContactRefusal }> {
+  const webApp = getWebApp();
+  if (!webApp?.requestContact) return Promise.resolve({ refused: "unsupported" as const });
+
+  return new Promise((resolve) => {
+    webApp.requestContact!((shared, result) => {
+      const contactData = result?.response;
+      if (shared && contactData) resolve({ contactData });
+      else resolve({ refused: "declined" as const });
+    });
+  });
+}
+
+/** Marks the document so CSS can tell it is running inside Telegram. */
+const TELEGRAM_CLASS = "tg-app";
+const HEIGHT_VARIABLE = "--tg-app-height";
+
+/**
+ * Bind the layout's idea of "full height" to Telegram's.
+ *
+ * `100vh` is the visible window in a browser, but inside Telegram the app is a
+ * panel with a header above it — so `min-h-screen` makes every screen taller
+ * than the space it has, and the bottom of the content sits below the fold.
+ *
+ * Telegram reports the real figure and changes it when the sheet is expanded or
+ * the keyboard opens, hence the subscription. `viewportStableHeight` rather than
+ * `viewportHeight`: the stable one excludes the transient shrink while the
+ * keyboard animates, which otherwise makes the layout jump on every focus.
+ *
+ * Returns a cleanup that puts the document back as it was.
+ */
+export function bindViewportHeight(): () => void {
+  const webApp = getWebApp();
+  if (!webApp || typeof document === "undefined") return () => {};
+
+  const root = document.documentElement;
+  const apply = () => {
+    root.style.setProperty(HEIGHT_VARIABLE, `${webApp.viewportStableHeight}px`);
+  };
+
+  root.classList.add(TELEGRAM_CLASS);
+  apply();
+  webApp.onEvent("viewportChanged", apply);
+
+  return () => {
+    webApp.offEvent("viewportChanged", apply);
+    root.classList.remove(TELEGRAM_CLASS);
+    root.style.removeProperty(HEIGHT_VARIABLE);
+  };
+}

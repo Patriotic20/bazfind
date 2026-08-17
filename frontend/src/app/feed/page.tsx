@@ -13,6 +13,7 @@ import {
 import Navbar from "@/components/navbar";
 import { useTheme } from "@/components/theme-provider";
 import { geoKeys, listDistricts, listRegions } from "@/lib/api/endpoints/geo";
+import { useLocation } from "@/lib/location/use-location";
 import { bookingKeys, listMyBookings } from "@/lib/api/endpoints/bookings";
 import { useSession } from "@/lib/hooks/use-session";
 import { formatUZS } from "@/lib/api/money";
@@ -55,7 +56,11 @@ export default function FeedPage() {
   const isDark = theme === "dark";
   const [mounted, setMounted] = useState(false);
   const [showLocationSelect, setShowLocationSelect] = useState(false);
-  const [currentLocation, setCurrentLocation] = useState("Toshkent");
+
+  // The same location the home screen sorts by. Picking a district here used to
+  // write a display string only this file could read, so the choice changed a
+  // label and nothing else.
+  const { location, choose: chooseLocation } = useLocation();
 
   // Location States. Whole rows rather than names: districts are fetched by
   // `region_id`, and district names repeat across regions.
@@ -68,8 +73,6 @@ export default function FeedPage() {
 
   useEffect(() => {
     setMounted(true);
-    const loc = localStorage.getItem("feedLocation") || "Toshkent";
-    setCurrentLocation(loc);
   }, []);
 
   // Dynamic bottom navigation bar visibility controller
@@ -136,9 +139,7 @@ export default function FeedPage() {
 
   const handleConfirmLocation = () => {
     if (selectedRegion && selectedDistrict) {
-      const formattedLoc = `${selectedRegion.name}, ${selectedDistrict.name.replace(" tumani", "")}`;
-      setCurrentLocation(formattedLoc);
-      localStorage.setItem("feedLocation", formattedLoc);
+      chooseLocation(selectedRegion, selectedDistrict);
       setShowLocationSelect(false);
       showToast("Manzil muvaffaqiyatli tasdiqlandi!");
     }
@@ -380,7 +381,7 @@ export default function FeedPage() {
               }`}
             >
               <MapPin className={`h-4 w-4 shrink-0 ${isDark ? "text-primary" : "text-zinc-700"}`} />
-              <span>{currentLocation.split(", ").pop()}</span>
+              <span>{location ? location.districtName.replace(" tumani", "") : "Manzil"}</span>
             </button>
           </div>
 

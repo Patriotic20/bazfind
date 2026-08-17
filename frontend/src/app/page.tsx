@@ -23,9 +23,11 @@ import {
 } from "lucide-react";
 import Navbar from "@/components/navbar";
 import { useTheme } from "@/components/theme-provider";
+import { geoKeys, listDistricts } from "@/lib/api/endpoints/geo";
 import { searchVenues, venueKeys, type VenueSearchQuery } from "@/lib/api/endpoints/venues";
 import { formatRating } from "@/lib/api/money";
 import { formatDistance } from "@/lib/format";
+import { useLocation } from "@/lib/location/use-location";
 import type { VenueType } from "@/lib/api/types";
 
 /** The three pills, and the venue type each one filters by. */
@@ -34,6 +36,19 @@ const TABS: { label: string; venueType?: VenueType }[] = [
   { label: "Restoranlar", venueType: "restoran" },
   { label: "To'yxonalar", venueType: "toyxona" },
 ];
+
+/**
+ * Why the automatic location came back with nothing, said plainly.
+ *
+ * `unknown` and `locating` are absent on purpose: neither is a problem, and a
+ * line of red text under a button that is still working is its own kind of bug.
+ */
+const LOCATION_PROBLEMS: Partial<Record<string, string>> = {
+  refused: "Manzilga ruxsat berilmadi. Brauzer sozlamalaridan ruxsat bering.",
+  unsupported: "Qurilmangiz manzilni aniqlashni qo'llab-quvvatlamaydi.",
+  unavailable: "Manzilni aniqlab bo'lmadi. Qaytadan urinib ko'ring.",
+  "out-of-country": "Siz O'zbekistondan tashqaridasiz — tumanni qo'lda tanlang.",
+};
 
 /**
  * The search response carries no photo — `VenueListItem` has no image field at
@@ -203,10 +218,37 @@ export default function WelcomePage() {
     return () => clearTimeout(timer);
   }, [searchText]);
 
+  // Asked for on entry, once. Everything below degrades to the national list if
+  // the answer never comes.
+  const { location, status: locationStatus, detect, choose } = useLocation({ auto: true });
+
+  // The other tumans of the region we landed in, for the picker below. Reference
+  // data seeded by a migration, so it is fetched once and kept.
+  const districtsQuery = useQuery({
+    queryKey: geoKeys.districts(location?.regionId ?? 0),
+    queryFn: ({ signal }) => listDistricts(location!.regionId, signal),
+    enabled: location !== null,
+    staleTime: Infinity,
+  });
+  const nearbyDistricts = districtsQuery.data ?? [];
+
+  /**
+   * What "near me" means depends on how the location was arrived at.
+   *
+   * A measured position sorts by real distance and leaves the district open —
+   * the venue two streets away in the next tuman is still the nearest one, and
+   * with five or six venues in a city a strict district filter mostly returns
+   * nothing. A district picked by hand is the opposite: it is an explicit ask
+   * for that district, so it filters.
+   */
   const venueQuery: VenueSearchQuery = {
     query: searchQuery || undefined,
     venue_type: TABS.find((tab) => tab.label === activeTab)?.venueType,
-    sort: "rating",
+    ...(location?.latitude != null && location.longitude != null
+      ? { lat: location.latitude, lng: location.longitude, sort: "distance" }
+      : location
+        ? { district_id: location.districtId, sort: "rating" }
+        : { sort: "rating" }),
     limit: 5,
   };
 
@@ -264,12 +306,36 @@ export default function WelcomePage() {
               ? "py-5 border-b border-brand-dark-border" 
               : "pt-6 pb-2"
           }`}>
-            <h1 className={`text-xl font-extrabold tracking-tight ${
-              theme === "dark" ? "text-white" : "text-zinc-900"
-            }`}>
-              Hayrli kun! {fullName}
-            </h1>
-            
+            <div className="min-w-0">
+              <h1 className={`text-xl font-extrabold tracking-tight ${
+                theme === "dark" ? "text-white" : "text-zinc-900"
+              }`}>
+                Hayrli kun! {fullName}
+              </h1>
+
+              {/* Where the venues below are being counted from. Tapping it opens
+                  the picker, which is the only way out when the phone refuses. */}
+              <button
+                type="button"
+                // Always the picker, never a bare retry: after a refusal the
+                // browser denies again without showing anything, so a chip that
+                // re-detected would look like a dead button.
+                onClick={() => setShowLocationSearch(true)}
+                className={`mt-0.5 flex items-center gap-1 text-xs font-bold transition-opacity active:opacity-60 ${
+                  theme === "dark" ? "text-white/60" : "text-zinc-500"
+                }`}
+              >
+                <MapPin className="h-3.5 w-3.5 shrink-0 text-[#FF6B00]" />
+                <span className="truncate">
+                  {location
+                    ? `${location.districtName}, ${location.regionName}`
+                    : locationStatus === "locating"
+                      ? "Manzil aniqlanmoqda..."
+                      : "Manzilni aniqlash"}
+                </span>
+              </button>
+            </div>
+
             <div className="flex items-center gap-2">
               {/* Theme Toggle Button */}
               <button
@@ -909,39 +975,29 @@ export default function WelcomePage() {
         </div>
       )}
 
-      {/* Location Search Overlay (2-rasm) */}
+      {/* Location Search Overlay (2-rasm).
+
+          Above the bottom navigation, not level with it: both are fixed, and at
+          equal z-index the nav wins on document order and swallows taps on the
+          districts nearest the foot of the list. */}
       {showLocationSearch && (
-        <div className="fixed inset-0 z-50 bg-brand-light-surface dark:bg-[var(--background)] flex flex-col max-w-md mx-auto shadow-2xl animate-fade-in text-foreground dark:text-white select-none">
-          {/* Header Row with Search Input */}
+        <div className="fixed inset-0 z-60 bg-brand-light-surface dark:bg-[var(--background)] flex flex-col max-w-md mx-auto shadow-2xl animate-fade-in text-foreground dark:text-white select-none">
+          {/* Header Row */}
           <div className="flex items-center gap-3 px-6 py-5 border-b border-brand-light-border dark:border-white/5 bg-brand-light-surface dark:bg-[var(--background)] z-30 sticky top-0">
             <button
-              onClick={() => {
-                setShowLocationSearch(false);
-                setShowPartySheet(true); // go back to bottom sheet
-              }}
+              onClick={() => setShowLocationSearch(false)}
               className="p-2.5 rounded-xl bg-brand-light-card dark:bg-[#393939] border border-brand-light-border dark:border-white/5 text-foreground/80 dark:text-white/80 hover:text-white transition-all active:scale-90"
             >
               <ChevronLeft className="h-5 w-5" />
             </button>
-
-            {/* Search Input Field */}
-            <div className="flex-1 flex items-center bg-brand-light-card dark:bg-[#393939] border border-brand-light-border dark:border-white/5 rounded-2xl overflow-hidden focus-within:border-[#FF6B00]/40 transition-all px-4 py-3">
-              <Search className="h-4.5 w-4.5 text-foreground/40 dark:text-zinc-500 shrink-0" />
-              <input
-                type="text"
-                placeholder="Qidirish"
-                className="w-full bg-transparent border-0 p-0 pl-2.5 text-sm font-bold text-foreground dark:text-white focus:ring-0 outline-none placeholder:text-foreground/30 dark:placeholder:text-zinc-600"
-              />
-            </div>
+            <h2 className="text-lg font-black text-foreground dark:text-white">Manzil</h2>
           </div>
 
           {/* Action: Manzilni avtomatik aniqlash */}
           <button
-            onClick={() => {
-              setShowLocationSearch(false);
-              window.location.href = `/venue/3?guests=${partySize}&date=${selectedDay}&time=${selectedTime}&location=Toshkent`;
-            }}
-            className="w-full px-6 py-5 border-b border-brand-light-border dark:border-white/5 flex items-center gap-3.5 hover:bg-foreground/5 dark:hover:bg-white/5 transition-colors cursor-pointer text-left"
+            onClick={detect}
+            disabled={locationStatus === "locating"}
+            className="w-full px-6 py-5 border-b border-brand-light-border dark:border-white/5 flex items-center gap-3.5 hover:bg-foreground/5 dark:hover:bg-white/5 transition-colors cursor-pointer text-left disabled:opacity-60"
           >
             {/* Compass / Navigation Icon */}
             <div className="text-[#FF6B00]">
@@ -949,30 +1005,67 @@ export default function WelcomePage() {
                 <path d="M12 2L2 22l10-4 10 4L12 2z" />
               </svg>
             </div>
-            <span className="text-sm font-black text-foreground dark:text-white">Manzilni avtomatik aniqlash</span>
+            <span className="text-sm font-black text-foreground dark:text-white">
+              {locationStatus === "locating"
+                ? "Aniqlanmoqda..."
+                : "Manzilni avtomatik aniqlash"}
+            </span>
           </button>
 
-          {/* Section: Oxirgi manzillar */}
-          <div className="flex-1 px-6 py-6 space-y-4 text-left">
-            <h3 className="text-sm font-black text-foreground/40 dark:text-zinc-400 tracking-wide">Oxirgi manzillar</h3>
-            
+          {/* Why the automatic route came back empty, in the customer's words.
+              Without this a refused permission looks like a broken button. */}
+          {LOCATION_PROBLEMS[locationStatus] && (
+            <p className="px-6 py-4 text-xs font-bold text-red-500 border-b border-brand-light-border dark:border-white/5">
+              {LOCATION_PROBLEMS[locationStatus]}
+            </p>
+          )}
+
+          {/* Section: the districts of the region we are in, so a customer can
+              move to the next tuman without leaving the screen. */}
+          <div className="flex-1 overflow-y-auto px-6 py-6 space-y-4 text-left">
+            <h3 className="text-sm font-black text-foreground/40 dark:text-zinc-400 tracking-wide">
+              {location ? location.regionName : "Tumanni tanlang"}
+            </h3>
+
+            {!location && (
+              <p className="text-xs font-bold text-foreground/50 dark:text-zinc-500">
+                Manzilni aniqlang yoki{" "}
+                <Link href="/feed" className="text-[#FF6B00] underline">
+                  viloyat va tumanni qo&apos;lda tanlang
+                </Link>
+                .
+              </p>
+            )}
+
             <div className="space-y-1">
-              {[
-                { name: "Navoiy shahar, Navoiy" },
-                { name: "Mirzo Ulug'bek, Toshkent" }
-              ].map((loc, idx) => (
-                <button
-                  key={idx}
-                  onClick={() => {
-                    setShowLocationSearch(false);
-                    window.location.href = `/venue/3?guests=${partySize}&date=${selectedDay}&time=${selectedTime}&location=${encodeURIComponent(loc.name)}`;
-                  }}
-                  className="w-full py-4 border-b border-brand-light-border dark:border-white/5 last:border-b-0 flex items-center gap-3.5 hover:bg-foreground/5 dark:hover:bg-white/5 transition-colors cursor-pointer text-left"
-                >
-                  <MapPin className="h-5 w-5 text-foreground/30 dark:text-zinc-500 shrink-0" />
-                  <span className="text-sm font-bold text-foreground/90 dark:text-white/90">{loc.name}</span>
-                </button>
-              ))}
+              {nearbyDistricts.map((district) => {
+                const isCurrent = district.id === location?.districtId;
+                return (
+                  <button
+                    key={district.id}
+                    onClick={() => {
+                      if (location) choose({ id: location.regionId, name: location.regionName }, district);
+                      setShowLocationSearch(false);
+                    }}
+                    className="w-full py-4 border-b border-brand-light-border dark:border-white/5 last:border-b-0 flex items-center gap-3.5 hover:bg-foreground/5 dark:hover:bg-white/5 transition-colors cursor-pointer text-left"
+                  >
+                    <MapPin
+                      className={`h-5 w-5 shrink-0 ${
+                        isCurrent ? "text-[#FF6B00]" : "text-foreground/30 dark:text-zinc-500"
+                      }`}
+                    />
+                    <span
+                      className={`text-sm font-bold ${
+                        isCurrent
+                          ? "text-[#FF6B00]"
+                          : "text-foreground/90 dark:text-white/90"
+                      }`}
+                    >
+                      {district.name}
+                    </span>
+                  </button>
+                );
+              })}
             </div>
           </div>
         </div>

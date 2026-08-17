@@ -1,11 +1,18 @@
 "use client";
 
 import { createContext, useContext, useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { telegramLogin } from "@/lib/api/endpoints/auth";
+import { authKeys, getMe, telegramLogin } from "@/lib/api/endpoints/auth";
 import { hasSession } from "@/lib/api/auth-tokens";
-import { announceReady, getInitData, getWebApp, isInsideTelegram } from "@/lib/telegram/webapp";
+import { TelegramPhoneStep } from "@/components/telegram-phone-step";
+import {
+  announceReady,
+  bindViewportHeight,
+  getInitData,
+  getWebApp,
+  isInsideTelegram,
+} from "@/lib/telegram/webapp";
 import type { TelegramWebAppUser } from "@/lib/telegram/types";
 
 /**
@@ -98,6 +105,11 @@ export function TelegramProvider({ children }: { children: React.ReactNode }) {
       });
   }, [inside, queryClient]);
 
+  // Not gated on `inside`: the height is a layout concern, not an identity one.
+  // A runtime that reports a viewport gets used even when it hands over no
+  // initData, and `bindViewportHeight` is a no-op when there is no runtime.
+  useEffect(() => bindViewportHeight(), []);
+
   const status: TelegramStatus = !inside
     ? "outside"
     : !outcome.done
@@ -108,6 +120,20 @@ export function TelegramProvider({ children }: { children: React.ReactNode }) {
 
   const user = inside ? (getWebApp()?.initDataUnsafe.user ?? null) : null;
 
+  // Only once signed in — before that there is no account to have a number.
+  const me = useQuery({
+    queryKey: authKeys.me(),
+    queryFn: ({ signal }) => getMe(signal),
+    enabled: status === "ready",
+    retry: false,
+  });
+
+  // Dismissed for this launch, not for ever: `sessionStorage` clears when the
+  // Mini App is closed, so someone who said "later" is asked again next time
+  // rather than never.
+  const [skipped, setSkipped] = useState(false);
+  const needsPhone = status === "ready" && me.data !== undefined && me.data.phone === null;
+
   return (
     <TelegramContext.Provider value={{ inside, status, user, error: outcome.error }}>
       {/*
@@ -117,7 +143,13 @@ export function TelegramProvider({ children }: { children: React.ReactNode }) {
         the token lands. `failed` still renders — a Telegram user whose sign-in
         broke should land in the ordinary app, not on a blank screen.
       */}
-      {status === "signing-in" ? <SigningIn /> : children}
+      {status === "signing-in" ? (
+        <SigningIn />
+      ) : needsPhone && !skipped ? (
+        <TelegramPhoneStep onSkip={() => setSkipped(true)} />
+      ) : (
+        children
+      )}
     </TelegramContext.Provider>
   );
 }

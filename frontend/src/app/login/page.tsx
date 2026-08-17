@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
+import { TelegramPhonePrompt } from "@/components/telegram-phone-prompt";
 import { useTheme } from "@/components/theme-provider";
 import {
   authKeys,
@@ -63,6 +64,19 @@ type Step =
   | "partner_password"
   | 7
   | 8;
+
+/**
+ * Does this look like a phone number rather than an issued login?
+ *
+ * Deliberately loose. The server does the real normalising — `901234567`,
+ * `998901234567` and `+998 90 123-45-67` all reduce to one number there — so all
+ * this has to decide is which endpoint to try. Anything with a letter in it is a
+ * login; a bare run of digits is a number.
+ */
+function looksLikePhone(value: string): boolean {
+  const digits = value.replace(/[\s()+-]/g, "");
+  return /^\d{7,15}$/.test(digits);
+}
 
 interface Language {
   code: string;
@@ -792,6 +806,20 @@ export default function LoginPage() {
     }
   };
 
+  /**
+   * The field accepts a phone number or an issued login, and they sign in
+   * through different endpoints.
+   *
+   * `/auth/staff-login` looks the value up in `users.login`, which is null for
+   * every customer and every venue owner — so sending everyone there refused
+   * everyone but staff, with the right password, and said only "login yoki parol
+   * noto'g'ri". The screen already promises "admin yoki telefon"; this makes it
+   * true.
+   *
+   * A number goes to the customer endpoint, anything else to staff. The one
+   * ambiguous case is a staff login made only of digits — nothing forbids it —
+   * so a refused phone attempt falls through to staff rather than stopping.
+   */
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
@@ -801,9 +829,21 @@ export default function LoginPage() {
       return;
     }
 
+    const entered = username.trim();
+    const secret = password.trim();
+
     setLoading(true);
     try {
-      await afterAuth(await staffLogin(username.trim(), password.trim()));
+      if (looksLikePhone(entered)) {
+        try {
+          await afterAuth(await login(entered, secret));
+          return;
+        } catch (phoneError) {
+          if (!(phoneError instanceof ApiError)) throw phoneError;
+          // Fall through: an all-digit staff login reads as a phone number.
+        }
+      }
+      await afterAuth(await staffLogin(entered, secret));
     } catch (err) {
       // The server refuses an unknown login and a wrong password identically,
       // on purpose — this message must not distinguish them either.
@@ -2025,6 +2065,11 @@ export default function LoginPage() {
                       Add friends
                     </button>
                   </div>
+                </div>
+
+                {/* Only inside Telegram, and only until a number is stored. */}
+                <div className="w-full">
+                  <TelegramPhonePrompt hasPhone={Boolean(phone)} />
                 </div>
 
                 {/* Options List Dashboard Container */}

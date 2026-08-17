@@ -13,6 +13,7 @@ import {
 import { bookingKeys, listMyBookings } from "@/lib/api/endpoints/bookings";
 import { createReview } from "@/lib/api/endpoints/reviews";
 import { hasSession } from "@/lib/api/auth-tokens";
+import { VenueMap } from "@/components/venue-map";
 import { formatUZS, formatRating, parseMoney } from "@/lib/api/money";
 import { formatDate, nextDateForWeekday } from "@/lib/format";
 import { ApiError } from "@/lib/api/types";
@@ -505,6 +506,14 @@ export default function VenueDetailPage({ params }: Props) {
             <MapPin className={`h-4 w-4 shrink-0 ${isDark ? "text-white/30" : "text-zinc-400"}`} />
             <span>{address}</span>
           </div>
+
+          {/* The address as a place rather than a sentence. */}
+          <VenueMap
+            latitude={venue.latitude}
+            longitude={venue.longitude}
+            name={venue.name}
+            className="h-44 w-full overflow-hidden rounded-2xl"
+          />
         </div>
 
         {/* Menyu Section */}

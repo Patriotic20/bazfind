@@ -112,6 +112,26 @@ export interface paths {
         patch: operations["geo_update_region"];
         trace?: never;
     };
+    "/api/v1/districts/nearest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Koordinata bo'yicha eng yaqin tuman
+         * @description Telefon bergan koordinatadan tuman va viloyatni aniqlaydi — mijoz o'zining tumanini qo'lda tanlamasligi uchun. Ochiq: manzil hisobdan oldin ham kerak. `distance_m` — tuman markazigacha bo'lgan masofa.
+         */
+        get: operations["geo_nearest_district"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/districts": {
         parameters: {
             query?: never;
@@ -250,6 +270,26 @@ export interface paths {
          * @description Mini App uchun. Telegram bergan `initData` satri o'zgartirilmagan holda yuboriladi; imzo tekshirilgach, akkaunt topiladi yoki yaratiladi. Parol ham, tasdiqlash kodi ham talab qilinmaydi.
          */
         post: operations["auth_telegram_login"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/telegram/contact": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Telegram orqali raqamni tasdiqlash
+         * @description Mini App uchun. `Telegram.WebApp.requestContact` javobi o'zgartirilmagan holda yuboriladi; imzo tekshirilgach, raqam akkauntga biriktiriladi. Tasdiqlash kodi yuborilmaydi — raqamni Telegram allaqachon tekshirgan.
+         */
+        post: operations["auth_telegram_contact"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1988,6 +2028,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/telegram/webhook": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Telegram webhook
+         * @description Telegram yangilanishlarni shu manzilga yuboradi. Faqat Telegram uchun: har bir so'rov `X-Telegram-Bot-Api-Secret-Token` sarlavhasi bilan tekshiriladi. Javob doim 200 — aks holda Telegram qayta yuborishni boshlaydi.
+         */
+        post: operations["telegram_webhook"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -2738,6 +2798,30 @@ export interface components {
          */
         MessageSenderType: "user" | "venue";
         /**
+         * NearestDistrictRead
+         * @description Qayerdaman: koordinatadan tuman va viloyat.
+         *
+         *     `distance_m` — nuqtadan tuman markazigacha. Mamlakatdan tashqaridagi
+         *     koordinata ham eng yaqin tumanni qaytaradi, shuning uchun masofa kerak:
+         *     mijoz uni ko'rib, javob ma'noli yoki yo'qligini hal qiladi.
+         */
+        NearestDistrictRead: {
+            /** District Id */
+            district_id: number;
+            /** District Name */
+            district_name: string;
+            /** Region Id */
+            region_id: number;
+            /** Region Name */
+            region_name: string;
+            /** Latitude */
+            latitude: string;
+            /** Longitude */
+            longitude: string;
+            /** Distance M */
+            distance_m: number;
+        };
+        /**
          * NotificationRead
          * @description Xabarlar ekrani `sent_at` bo'yicha Bugun / Shu hafta / Shu oy ga ajratadi.
          */
@@ -3443,6 +3527,25 @@ export interface components {
             items?: components["schemas"]["BookingItemCreate"][];
         };
         /**
+         * TelegramChat
+         * @description Faqat javob yuborish uchun kerak bo'lgan qism.
+         */
+        TelegramChat: {
+            /** Id */
+            id: number;
+        };
+        /**
+         * TelegramContactShare
+         * @description `requestContact` javobi, o'zgartirilmagan holda.
+         *
+         *     Imzo aynan shu satr uchun hisoblangan, shuning uchun uni qismlarga ajratib
+         *     yuborish mumkin emas — raqamni alohida yuborish tekshiruvni yo'q qiladi.
+         */
+        TelegramContactShare: {
+            /** Contact Data */
+            contact_data: string;
+        };
+        /**
          * TelegramLogin
          * @description Mini App ochilganda Telegram bergan `initData` satri, o'zgartirilmagan holda.
          *
@@ -3452,6 +3555,29 @@ export interface components {
         TelegramLogin: {
             /** Init Data */
             init_data: string;
+        };
+        /**
+         * TelegramMessage
+         * @description Botga kelgan xabar.
+         */
+        TelegramMessage: {
+            chat: components["schemas"]["TelegramChat"];
+            /** Text */
+            text?: string | null;
+        };
+        /**
+         * TelegramUpdate
+         * @description Telegram webhookka yuboradigan yangilanish.
+         *
+         *     Telegram bu yerga o'nlab turdagi yangilanish yuboradi va vaqt o'tishi bilan
+         *     yangilarini qo'shadi, shuning uchun sxema ataylab tor: notanish maydonlar
+         *     e'tiborsiz qoldiriladi, aks holda har bir yangi maydon 422 xatosiga
+         *     aylanardi va Telegram yetkazishni qayta urina boshlardi.
+         */
+        TelegramUpdate: {
+            /** Update Id */
+            update_id: number;
+            message?: components["schemas"]["TelegramMessage"] | null;
         };
         /** TokenPair */
         TokenPair: {
@@ -4164,6 +4290,21 @@ export interface components {
             sort_order: number;
         };
         /**
+         * WebhookAck
+         * @description Telegram javob tanasini o'qimaydi — u faqat 200 statusini kutadi.
+         *
+         *     Shunga qaramay bu yerda haqiqiy sxema turibdi: API dagi har bir yo'l
+         *     `response_model` e'lon qilishi shart, va bu qoidadan istisno qilish bitta
+         *     yo'lni hujjatsiz qoldirardi.
+         */
+        WebhookAck: {
+            /**
+             * Ok
+             * @default true
+             */
+            ok: boolean;
+        };
+        /**
          * WeekdayBar
          * @description Haftalik grafikning bir ustuni.
          */
@@ -4386,6 +4527,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RegionRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    geo_nearest_district: {
+        parameters: {
+            query: {
+                lat: number;
+                lng: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NearestDistrictRead"];
                 };
             };
             /** @description Validation Error */
@@ -4635,6 +4808,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TokenPair"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    auth_telegram_contact: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TelegramContactShare"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserRead"];
                 };
             };
             /** @description Validation Error */
@@ -7706,6 +7912,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PeriodComparisonRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    telegram_webhook: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Telegram-Bot-Api-Secret-Token"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TelegramUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookAck"];
                 };
             };
             /** @description Validation Error */

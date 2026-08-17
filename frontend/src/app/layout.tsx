@@ -35,14 +35,15 @@ export default function RootLayout({
       className={`${plusJakartaSans.variable} ${geistMono.variable} h-full antialiased`}
       suppressHydrationWarning
     >
-      {/*
-        The Telegram runtime has to exist before any application code reads it,
-        so this is `beforeInteractive` — which Next only honours in the root
-        layout. Outside Telegram the script loads and defines nothing useful,
-        which is exactly what the app expects.
-      */}
-      <Script src="https://telegram.org/js/telegram-web-app.js" strategy="beforeInteractive" />
       <body className="min-h-full bg-[var(--background)] text-foreground transition-colors duration-300 flex justify-center items-stretch">
+        {/*
+          Inside <body>, not beside it: React rejects a <script> as a direct
+          child of <html>, and the resulting hydration error takes the whole
+          client render down with it. `beforeInteractive` is hoisted into the
+          head by Next from here just the same, which is what the Telegram
+          runtime needs — it must exist before any application code reads it.
+        */}
+        <Script src="https://telegram.org/js/telegram-web-app.js" strategy="beforeInteractive" />
         <Providers>
           <TelegramProvider>
             <ThemeProvider>

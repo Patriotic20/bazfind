@@ -80,6 +80,22 @@ export async function telegramLogin(initData: string): Promise<TokenPair> {
   return pair;
 }
 
+/**
+ * Hand the backend the signed contact Telegram produced.
+ *
+ * Passed on exactly as received: the signature covers that precise string, and
+ * the backend re-checks it before believing the number. Returns the updated
+ * user, so the caller can render the phone it actually stored rather than the
+ * one it hoped for.
+ */
+export function shareTelegramContact(contactData: string): Promise<User> {
+  return apiFetch<User>("/v1/auth/telegram/contact", {
+    method: "POST",
+    auth: "required",
+    body: { contact_data: contactData },
+  });
+}
+
 /** Staff sign in with an issued login, not with their phone number. */
 export async function staffLogin(userLogin: string, password: string): Promise<TokenPair> {
   const pair = await apiFetch<TokenPair>("/v1/auth/staff-login", {

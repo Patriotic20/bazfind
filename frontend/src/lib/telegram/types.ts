@@ -42,6 +42,20 @@ export interface TelegramHapticFeedback {
   selectionChanged: () => void;
 }
 
+/**
+ * What `requestContact` hands back when the user agrees.
+ *
+ * Typed defensively: `response` is the signed query string the backend verifies,
+ * and it is the only field this app reads. `responseUnsafe` is the same data
+ * already parsed and, as its name says, unverified — it must never reach a
+ * decision.
+ */
+export interface TelegramContactResponse {
+  status: "sent" | "cancelled" | string;
+  response?: string;
+  responseUnsafe?: unknown;
+}
+
 export interface TelegramWebApp {
   /**
    * The signed payload, verbatim.
@@ -63,6 +77,16 @@ export interface TelegramWebApp {
 
   BackButton: TelegramBackButton;
   HapticFeedback: TelegramHapticFeedback;
+
+  /**
+   * Ask the user to share the phone number on their Telegram account.
+   *
+   * Available from Bot API 6.9, so it is optional here — an older client simply
+   * does not have it, and the app has to notice rather than throw.
+   */
+  requestContact?: (
+    callback: (shared: boolean, result?: TelegramContactResponse) => void,
+  ) => void;
 
   ready: () => void;
   expand: () => void;
