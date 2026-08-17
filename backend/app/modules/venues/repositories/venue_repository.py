@@ -4,7 +4,6 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
-from geoalchemy2.functions import ST_Distance, ST_DWithin, ST_GeogFromText
 from sqlalchemy import (
     ColumnElement,
     Select,
@@ -16,6 +15,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.geo import haversine_distance_m
 from app.core.pagination import Page
 from app.modules.catalog.models import Amenity
 from app.modules.reviews.models import Review, ReviewStatus
@@ -38,14 +38,13 @@ SORT_RATING = "rating"
 SORT_PRICE = "price"
 
 
-def point_ewkt(latitude: Decimal | float, longitude: Decimal | float) -> str:
-    """`venues.location` in the one format PostGIS reads back.
+def venue_distance_m(latitude: float, longitude: float) -> ColumnElement[float]:
+    """Great-circle distance from a point to `venues`, in metres.
 
-    Longitude first. Reversing the pair is silent — it produces a valid point in
-    the wrong hemisphere, and the only symptom is a distance sort that ranks
-    Tashkent behind the Indian Ocean.
+    A thin name over the shared helper, kept because "distance to a venue" reads
+    better at every call site than the four-argument general form.
     """
-    return f"SRID=4326;POINT({longitude} {latitude})"
+    return haversine_distance_m(latitude, longitude, Venue.latitude, Venue.longitude)
 
 
 @dataclass(frozen=True, slots=True)
@@ -162,17 +161,15 @@ class VenueRepository:
         longitude: float | None,
         radius_m: float | None,
         only_open_now: bool,
-    ) -> Select[tuple[Venue, str | None, str | None, float | None, bool]]:
+    ) -> Select[tuple[Venue, str, str | None, float | None, bool]]:
 
-        point = (
-            ST_GeogFromText(point_ewkt(latitude, longitude))
+        near = (
+            venue_distance_m(latitude, longitude)
             if latitude is not None and longitude is not None
             else None
         )
         distance = (
-            ST_Distance(Venue.location, point).label("distance_m")
-            if point is not None
-            else literal(None).label("distance_m")
+            near.label("distance_m") if near is not None else literal(None).label("distance_m")
         )
         is_open_now = self._is_open_now_expression(local_dt).label("is_open_now")
 
@@ -184,8 +181,8 @@ class VenueRepository:
             is_open_now,
         ).where(Venue.status == VenueStatus.ACTIVE)
 
-        if point is not None and radius_m is not None:
-            stmt = stmt.where(ST_DWithin(Venue.location, point, radius_m))
+        if near is not None and radius_m is not None:
+            stmt = stmt.where(near <= radius_m)
 
         if venue_type is not None:
             stmt = stmt.where(Venue.venue_type == venue_type)
@@ -256,8 +253,7 @@ class VenueRepository:
         )
 
         if sort == SORT_DISTANCE and latitude is not None and longitude is not None:
-            point = ST_GeogFromText(point_ewkt(latitude, longitude))
-            stmt = stmt.order_by(ST_Distance(Venue.location, point).asc(), Venue.id)
+            stmt = stmt.order_by(venue_distance_m(latitude, longitude).asc(), Venue.id)
         elif sort == SORT_PRICE:
             stmt = stmt.order_by(Venue.base_price.asc().nulls_last(), Venue.id)
         else:

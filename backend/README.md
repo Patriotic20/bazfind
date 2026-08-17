@@ -18,7 +18,7 @@ the one-model-per-file / no-base-repository rules are not optional.
 | ORM           | SQLAlchemy 2.x async, `Mapped`/`mapped_column` |
 | Migrations    | Alembic (async `env.py`)                      |
 | Settings      | Pydantic v2 + pydantic-settings               |
-| Database      | PostgreSQL 17 + PostGIS + asyncpg             |
+| Database      | PostgreSQL 17 + asyncpg                       |
 | Cache / locks | Redis                                         |
 | Packaging     | uv                                            |
 | Lint / format | ruff                                          |
@@ -27,18 +27,14 @@ the one-model-per-file / no-base-repository rules are not optional.
 
 ## Quick start
 
-You need a PostgreSQL with **PostGIS** — plain PostgreSQL will not do. The first
-migration creates three extensions (`postgis`, `btree_gist`, `pg_trgm`) and the
-schema depends on all of them: `venues.location` is a `geography(Point,4326)`,
-the no-double-booking rule is a GiST exclusion constraint, and venue search is a
-trigram index.
-
-The quickest way to one is a container:
+Any stock PostgreSQL 17 will do. The first migration creates `btree_gist` and
+`pg_trgm`, both of which ship with PostgreSQL itself — the no-double-booking rule
+is a GiST exclusion constraint, and venue search is a trigram index.
 
 ```sh
 docker run -d --name bazmly-postgres \
   -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=baz \
-  -p 5432:5432 postgis/postgis:17-3.5-alpine
+  -p 5432:5432 postgres:17-alpine
 ```
 
 Then:
@@ -59,10 +55,6 @@ uv run uvicorn app.main:app --reload
 Built by Nixpacks from [`railway.json`](railway.json); there is no Dockerfile.
 The start command runs `alembic upgrade head` before uvicorn, so a fresh
 database migrates and seeds its reference data on first boot.
-
-Railway's stock PostgreSQL **does not include PostGIS**. Provision the PostGIS
-template instead, or the very first migration fails and the service never
-starts.
 
 Variables to set on the service:
 
