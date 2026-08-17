@@ -1,0 +1,21 @@
+# Railway deployment configuration for the backend service.
+#
+# Only the backend is described here. Postgres is a separate Railway service
+# created from the PostGIS template — see docs/railway-deploy.md, which also
+# lists the environment variables this service needs.
+
+[build]
+# Not Nixpacks: the Dockerfile already pins Python 3.14 and installs from
+# uv.lock, so the image Railway runs is the image that runs locally.
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+# The router mounts every route under settings.api.prefix, which defaults to
+# /api — so the health endpoint is /api/health, not /health.
+healthcheckPath = "/api/health"
+# Generous, because the entrypoint runs `alembic upgrade head` before uvicorn
+# binds a port. A cold first deploy applies every migration in that window.
+healthcheckTimeout = 300
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10
