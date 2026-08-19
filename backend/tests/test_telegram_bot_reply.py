@@ -12,7 +12,8 @@ import httpx
 import pytest
 
 from app.modules.telegram import service as bot_service
-from app.modules.telegram.service import BANNER, BotService
+from app.modules.telegram.schemas import TelegramChat, TelegramMessage, TelegramUpdate
+from app.modules.telegram.service import ADMIN_BUTTON, BANNER, BotService
 
 TOKEN = "test-token"
 APP_URL = "https://app.example/uz"
@@ -97,6 +98,47 @@ async def test_a_refused_photo_drops_the_cached_id() -> None:
 
     assert not sent
     assert bot_service._banner_ids == {}
+
+
+def command(text: str) -> TelegramUpdate:
+    return TelegramUpdate(update_id=1, message=TelegramMessage(chat=TelegramChat(id=42), text=text))
+
+
+async def test_the_admin_command_opens_the_admin_panel(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`/admin` must land on the panel, not the customer-facing home screen."""
+    client, seen = recording_client(photo_ok())
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **_: client)
+
+    await bot().handle(command("/admin"))
+
+    body = seen[0].content.decode("utf-8", "replace")
+    assert f"{APP_URL}/admin" in body
+    assert ADMIN_BUTTON in body
+    assert '"web_app"' in body  # still inside Telegram, where initData signs them in
+
+
+async def test_the_admin_command_answers_when_addressed_to_the_bot_by_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """In a group chat commands arrive as `/admin@botname`."""
+    client, seen = recording_client(photo_ok())
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **_: client)
+
+    await bot().handle(command("/admin@bazmly_bot"))
+
+    assert f"{APP_URL}/admin" in seen[0].content.decode("utf-8", "replace")
+
+
+async def test_start_still_opens_the_app_root(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The customer entry point must not have been rerouted to the panel."""
+    client, seen = recording_client(photo_ok())
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **_: client)
+
+    await bot().handle(command("/start"))
+
+    body = seen[0].content.decode("utf-8", "replace")
+    assert APP_URL in body
+    assert f"{APP_URL}/admin" not in body
 
 
 async def test_the_text_still_arrives_when_the_photo_is_refused(

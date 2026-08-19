@@ -39,9 +39,16 @@ START_TEXT = (
 )
 HELP_TEXT = (
     "Ilovani ochish uchun pastdagi tugmani yoki menyudagi tugmani bosing.\n\n"
+    "Hamkorlar uchun boshqaruv paneli: /admin\n\n"
     "Savollar bo'lsa: @bazmly_support"
 )
+ADMIN_TEXT = (
+    "Boshqaruv paneli — bronlar, filiallar va xodimlar shu yerda.\n\n"
+    "Panel faqat hamkorlar uchun: zanjir egasi bo'lmagan foydalanuvchini "
+    "ilova kirish sahifasiga qaytaradi."
+)
 OPEN_BUTTON = "Ilovani ochish"
+ADMIN_BUTTON = "Panelni ochish"
 
 
 class BotService:
@@ -64,28 +71,40 @@ class BotService:
 
         command = message.text.split()[0].split("@")[0]
         if command == "/start":
-            text = START_TEXT
+            text, url, button = START_TEXT, self.app_url, OPEN_BUTTON
         elif command == "/help":
-            text = HELP_TEXT
+            text, url, button = HELP_TEXT, self.app_url, OPEN_BUTTON
+        elif command == "/admin":
+            # The bot stays stateless: it does not know who owns a chain, so the
+            # button is offered to everyone and the panel itself turns away
+            # non-partners, exactly as it does in a browser.
+            text, url, button = ADMIN_TEXT, self._admin_url, ADMIN_BUTTON
         else:
             return
 
         try:
-            await self._send(message.chat.id, text)
+            await self._send(message.chat.id, text, url=url, button=button)
         except Exception:
             logger.exception("Telegramga javob yuborib bo'lmadi: chat %s", message.chat.id)
 
     @property
-    def _keyboard(self) -> dict[str, object]:
+    def _admin_url(self) -> str:
+        # `app_url` may carry a path (a language prefix) or a trailing slash;
+        # naive concatenation would produce `//admin`, which Next.js 404s.
+        return self.app_url.rstrip("/") + "/admin"
+
+    def _keyboard(self, url: str | None = None, button: str = OPEN_BUTTON) -> dict[str, object]:
         """The one button that opens the Mini App.
 
         `web_app` rather than a plain URL button: a URL opens a browser, where
         `initData` does not exist and the person would face the phone-and-password
         form instead of being signed in already.
         """
-        return {"inline_keyboard": [[{"text": OPEN_BUTTON, "web_app": {"url": self.app_url}}]]}
+        return {"inline_keyboard": [[{"text": button, "web_app": {"url": url or self.app_url}}]]}
 
-    async def _send(self, chat_id: int, text: str) -> None:
+    async def _send(
+        self, chat_id: int, text: str, *, url: str | None = None, button: str = OPEN_BUTTON
+    ) -> None:
         """The logo with the text under it, or just the text if the photo fails.
 
         The picture is the first thing a person sees in a chat they have never
@@ -94,11 +113,19 @@ class BotService:
         image and the words still arrive.
         """
         async with httpx.AsyncClient(timeout=10) as client:
-            if await self._send_banner(client, chat_id, text):
+            if await self._send_banner(client, chat_id, text, url=url, button=button):
                 return
-            await self._send_text(client, chat_id, text)
+            await self._send_text(client, chat_id, text, url=url, button=button)
 
-    async def _send_banner(self, client: httpx.AsyncClient, chat_id: int, caption: str) -> bool:
+    async def _send_banner(
+        self,
+        client: httpx.AsyncClient,
+        chat_id: int,
+        caption: str,
+        *,
+        url: str | None = None,
+        button: str = OPEN_BUTTON,
+    ) -> bool:
         """Send the logo with the text as its caption. False if it did not go out."""
         if not BANNER.is_file():
             logger.warning("Telegram banneri topilmadi: %s", BANNER)
@@ -108,7 +135,7 @@ class BotService:
             "chat_id": str(chat_id),
             "caption": caption,
             # Multipart, so the markup travels as a JSON string rather than a field tree.
-            "reply_markup": json.dumps(self._keyboard),
+            "reply_markup": json.dumps(self._keyboard(url, button)),
         }
         cached = _banner_ids.get(self.bot_token)
         if cached:
@@ -138,8 +165,16 @@ class BotService:
         except ValueError, KeyError, IndexError, TypeError:
             logger.warning("Telegram sendPhoto javobida file_id yo'q")
 
-    async def _send_text(self, client: httpx.AsyncClient, chat_id: int, text: str) -> None:
-        payload = {"chat_id": chat_id, "text": text, "reply_markup": self._keyboard}
+    async def _send_text(
+        self,
+        client: httpx.AsyncClient,
+        chat_id: int,
+        text: str,
+        *,
+        url: str | None = None,
+        button: str = OPEN_BUTTON,
+    ) -> None:
+        payload = {"chat_id": chat_id, "text": text, "reply_markup": self._keyboard(url, button)}
         response = await client.post(f"{BOT_API}/bot{self.bot_token}/sendMessage", json=payload)
         if response.status_code != httpx.codes.OK:
             logger.warning("Telegram sendMessage %s: %s", response.status_code, response.text[:200])
