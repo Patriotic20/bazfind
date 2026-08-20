@@ -109,6 +109,11 @@ class StaffService:
                 return candidate
         raise PermissionDeniedError("Siz bu muassasada ishlamaysiz")
 
+    async def group_ids_for(self, user_id: int) -> set[int]:
+        """Every chain the person actively works in — the membership test behind
+        `VerifiedGroupId`."""
+        return {row.venue_group_id for row in await self.staff.list_for_user(user_id)}
+
     async def list_for_group(
         self,
         group_id: int,

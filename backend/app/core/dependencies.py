@@ -255,6 +255,27 @@ def get_client_location(
 ClientLocationDep = Annotated[ClientLocation | None, Depends(get_client_location)]
 
 
+async def get_verified_group_id(
+    session: SessionDep,
+    user: CurrentUser,
+    group_id: Annotated[int, Query(ge=1)],
+) -> int:
+    """A required `group_id` that must name a chain the caller works in.
+
+    For the partner reads that have no permission guard of their own. Without
+    this, any signed-in user could read another chain's staff list by picking
+    its id off a URL — the query param alone is a claim, not authority.
+    """
+    if auth_disabled():
+        return group_id
+    if group_id not in await StaffService(session).group_ids_for(user.id):
+        raise PermissionDeniedError("Siz bu tarmoqda ishlamaysiz")
+    return group_id
+
+
+VerifiedGroupId = Annotated[int, Depends(get_verified_group_id)]
+
+
 class PermissionRequired:
     """Guards a staff-facing write, and resolves the caller while it is there.
 
