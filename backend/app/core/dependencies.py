@@ -255,6 +255,51 @@ def get_client_location(
 ClientLocationDep = Annotated[ClientLocation | None, Depends(get_client_location)]
 
 
+async def _resolve_caller_group(session: AsyncSession, user_id: int) -> int:
+    """The one chain the caller works in, from their `venue_staff` rows.
+
+    Owners qualify like everyone else — onboarding writes their employment row in
+    the same transaction that creates the chain. No membership means no partner
+    API; membership in several chains is the one case an explicit `group_id`
+    still disambiguates.
+    """
+    groups = await StaffService(session).group_ids_for(user_id)
+    if not groups:
+        raise PermissionDeniedError("Siz hech qaysi tarmoqda ishlamaysiz")
+    if len(groups) > 1:
+        raise ValidationFailedError(
+            "Siz bir nechta tarmoqda ishlaysiz — `group_id` ko'rsating",
+            details={"group_ids": sorted(groups)},
+        )
+    return next(iter(groups))
+
+
+async def get_caller_group_id(
+    session: SessionDep,
+    user: CurrentUser,
+    group_id: Annotated[int | None, Query(ge=1)] = None,
+) -> int:
+    """`group_id` derived from the token, with the explicit param as an override.
+
+    The chain a request concerns is a fact about the caller, not an input — so
+    omitting the parameter is the normal case. When it *is* sent it must be a
+    chain the caller actually works in: before this check, any signed-in user
+    could read another chain's staff list by picking its id.
+    """
+    if auth_disabled():
+        return group_id if group_id is not None else await _resolve_caller_group(session, user.id)
+
+    if group_id is not None:
+        groups = await StaffService(session).group_ids_for(user.id)
+        if group_id not in groups:
+            raise PermissionDeniedError("Siz bu tarmoqda ishlamaysiz")
+        return group_id
+    return await _resolve_caller_group(session, user.id)
+
+
+CallerGroupId = Annotated[int, Depends(get_caller_group_id)]
+
+
 class PermissionRequired:
     """Guards a staff-facing write, and resolves the caller while it is there.
 
@@ -324,13 +369,11 @@ class GroupPermissionRequired:
         if auth_disabled():
             return user
         raw = request.path_params.get("group_id", group_id_query)
-        if raw is None:
-            raise ValidationFailedError(
-                "Bu amal uchun `group_id` talab qilinadi",
-                details={"permission": self.slug},
-            )
+        # No id anywhere is not an error any more: the caller's own chain is the
+        # obvious referent, resolved the same way `get_caller_group_id` does it.
+        group_id = int(raw) if raw is not None else await _resolve_caller_group(session, user.id)
         await StaffService(session).require_group_permission_in_transaction(
-            user.id, int(raw), self.slug
+            user.id, group_id, self.slug
         )
         return user
 

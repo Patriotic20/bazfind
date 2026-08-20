@@ -9,7 +9,7 @@ import { hasSession } from "@/lib/api/auth-tokens";
 import {
   confirmBooking,
   getDashboard,
-  getGroupWithBranches,
+  getMyBranches,
   getStaffCounts,
   inviteStaff,
   listDayBookings,
@@ -126,12 +126,11 @@ export default function AdminPage() {
   }, [router, session.isResolved, session.signedIn, session.isPartner]);
 
   const group = session.group;
-  const groupId = group?.id ?? null;
 
   const branchesQuery = useQuery({
-    queryKey: partnerKeys.branches(groupId ?? 0),
-    queryFn: ({ signal }) => getGroupWithBranches(groupId as number, signal),
-    enabled: groupId !== null,
+    queryKey: partnerKeys.branches(),
+    queryFn: ({ signal }) => getMyBranches(signal),
+    enabled: session.isPartner,
     staleTime: 60_000,
   });
   const branches = useMemo(
@@ -144,9 +143,9 @@ export default function AdminPage() {
   const venueId = selectedVenueId ?? branches[0]?.id ?? null;
 
   const dashboardQuery = useQuery({
-    queryKey: partnerKeys.dashboard(groupId ?? 0, venueId ?? 0),
-    queryFn: ({ signal }) => getDashboard(groupId as number, venueId as number, signal),
-    enabled: groupId !== null && venueId !== null,
+    queryKey: partnerKeys.dashboard(venueId ?? 0),
+    queryFn: ({ signal }) => getDashboard(venueId as number, signal),
+    enabled: venueId !== null,
     staleTime: 30_000,
   });
   const dashboard = dashboardQuery.data ?? null;
@@ -159,16 +158,16 @@ export default function AdminPage() {
   const bookings = bookingsQuery.data ?? [];
 
   const staffQuery = useQuery({
-    queryKey: partnerKeys.staff(groupId ?? 0),
-    queryFn: ({ signal }) => listStaff(groupId as number, signal),
-    enabled: groupId !== null,
+    queryKey: partnerKeys.staff(),
+    queryFn: ({ signal }) => listStaff(signal),
+    enabled: session.isPartner,
   });
   const staff = staffQuery.data ?? [];
 
   const staffCountsQuery = useQuery({
-    queryKey: partnerKeys.staffCounts(groupId ?? 0),
-    queryFn: ({ signal }) => getStaffCounts(groupId as number, signal),
-    enabled: groupId !== null,
+    queryKey: partnerKeys.staffCounts(),
+    queryFn: ({ signal }) => getStaffCounts(signal),
+    enabled: session.isPartner,
   });
 
   const rolesQuery = useQuery({
@@ -209,7 +208,7 @@ export default function AdminPage() {
 
   const inviteMutation = useMutation({
     mutationFn: () =>
-      inviteStaff(groupId as number, venueId as number, {
+      inviteStaff({
         full_name: newStaffName.trim(),
         phone: newStaffPhone.trim(),
         staff_role_id: newStaffRoleId as number,

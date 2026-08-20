@@ -45,6 +45,20 @@ async def get_mine(user: CurrentUser, session: SessionDep) -> VenueGroupRead:
 
 
 @router.get(
+    # Declared before `/{group_id}/branches`, or "me" would be parsed as an id.
+    "/me/branches",
+    response_model=VenueGroupWithBranchesRead,
+    operation_id="venue_groups_my_branches",
+    summary="Mening tarmog'im va filiallari",
+    description="Kirgan egasining tarmog'i va barcha filiallari — `group_id`siz.",
+)
+async def my_branches(user: CurrentUser, session: SessionDep) -> VenueGroupWithBranchesRead:
+    service = VenueGroupService(session)
+    mine = await service.get_for_owner(user.id)
+    return await service.get_with_branches(mine.id)
+
+
+@router.get(
     "/{group_id}/branches",
     response_model=VenueGroupWithBranchesRead,
     operation_id="venue_groups_get_with_branches",
