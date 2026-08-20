@@ -1,0 +1,108 @@
+services:
+  postgres:
+    # PostGIS build, not plain postgres:17-alpine — `venues.location` is
+    # geography(Point,4326) and the first migration creates the postgis extension.
+    image: postgis/postgis:17-3.5-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-baz}
+      TZ: UTC
+      PGTZ: UTC
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      # Host port is overridable so the stack can come up on a machine that
+      # already runs Postgres on 5432. Container port is always 5432.
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-baz}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  redis:
+    # Nothing reaches it today — it was the Eskiz token cache. Kept in the stack
+    # because the availability cache is the next thing due to move into it.
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # Application settings. The host ports this file substitutes come from the
+    # root `.env` instead, which compose reads on its own.
+    env_file:
+      # Optional: a fresh clone has only backend/.env.template, which the
+      # backend reads on its own — everything the container must override is
+      # set explicitly below.
+      - path: ./backend/.env
+        required: false
+    environment:
+      # Inside the compose network the database is reachable as `postgres`,
+      # which overrides the localhost URL in .env.
+      APP_CONFIG__DATABASE__URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-baz}
+      # Same reason as the database URL: inside the network the host is the service name.
+      APP_CONFIG__REDIS__URL: redis://redis:6379/0
+      # Derived from FRONTEND_PORT rather than repeated in backend/.env, so the
+      # origin the API allows cannot drift from the port the frontend is
+      # published on. Getting these two out of step breaks every request from
+      # the page while leaving curl and Swagger working.
+      APP_CONFIG__CORS__ORIGINS: '["http://localhost:${FRONTEND_PORT:-3000}"]'
+      TZ: UTC
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    # The entrypoint runs `alembic upgrade head` before handing off to this command.
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    healthcheck:
+      # Python rather than curl: the slim base image has no HTTP client, and the
+      # frontend's `depends_on` is only worth anything against a real readiness
+      # signal — migrations run before uvicorn, so "started" is not "serving".
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health').read()",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        # The browser resolves this, not the compose network — so it is the
+        # published host port and never `http://backend:8000`. It is baked into
+        # the bundle at build time, which is why it is an arg and not only an
+        # environment variable.
+        NEXT_PUBLIC_API_URL: http://localhost:${BACKEND_PORT:-8000}/api
+    depends_on:
+      backend:
+        # Readiness, not start order: the backend runs migrations before it
+        # binds a port.
+        condition: service_healthy
+    environment:
+      TZ: UTC
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+
+volumes:
+  postgres_data:
