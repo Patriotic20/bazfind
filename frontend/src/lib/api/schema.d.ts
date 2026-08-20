@@ -596,26 +596,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/venue/groups/me/branches": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Mening tarmog'im va filiallari
-         * @description Kirgan egasining tarmog'i va barcha filiallari — `group_id`siz.
-         */
-        get: operations["venue_groups_my_branches"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/venue/groups/{group_id}/branches": {
         parameters: {
             query?: never;
@@ -1073,7 +1053,7 @@ export interface paths {
         };
         /**
          * Hodimlar ro'yxati
-         * @description Filial, rol va faollik holati bo'yicha filtrlanadi. `group_id` ixtiyoriy: yuborilmasa, chaqiruvchining o'z tarmog'i olinadi.
+         * @description Filial, rol va faollik holati bo'yicha filtrlanadi.
          */
         get: operations["venue_staff_list"];
         put?: never;
@@ -1093,7 +1073,7 @@ export interface paths {
         };
         /**
          * Hodim hisoblagichlari
-         * @description Hodimlar sarlavhasidagi Jami / Aktiv / Noaktiv. `group_id` ixtiyoriy: yuborilmasa, chaqiruvchining o'z tarmog'i olinadi.
+         * @description Hodimlar sarlavhasidagi Jami / Aktiv / Noaktiv.
          */
         get: operations["venue_staff_counts"];
         put?: never;
@@ -1135,7 +1115,7 @@ export interface paths {
         put?: never;
         /**
          * Hodim qo'shish
-         * @description Login va vaqtinchalik parol **faqat shu javobda** qaytariladi — ularni hodimga o'zingiz yetkazasiz. Boshqa hech qayerdan qayta o'qib bo'lmaydi. `group_id` ixtiyoriy: yuborilmasa, chaqiruvchining o'z tarmog'i olinadi.
+         * @description Login va vaqtinchalik parol **faqat shu javobda** qaytariladi — ularni hodimga o'zingiz yetkazasiz. Boshqa hech qayerdan qayta o'qib bo'lmaydi.
          */
         post: operations["venue_staff_invite"];
         delete?: never;
@@ -1997,7 +1977,7 @@ export interface paths {
         };
         /**
          * Boshqaruv paneli
-         * @description Hisoblagichlar, haftalik grafik, oylik jami, o'zgarish va jonli navbat. `group_id` ixtiyoriy: yuborilmasa, chaqiruvchining o'z tarmog'i olinadi.
+         * @description Hisoblagichlar, haftalik grafik, oylik jami, o'zgarish va jonli navbat.
          */
         get: operations["venue_analytics_dashboard"];
         put?: never;
@@ -5391,26 +5371,6 @@ export interface operations {
             };
         };
     };
-    venue_groups_my_branches: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["VenueGroupWithBranchesRead"];
-                };
-            };
-        };
-    };
     venue_groups_get_with_branches: {
         parameters: {
             query?: never;
@@ -6220,11 +6180,11 @@ export interface operations {
     };
     venue_staff_list: {
         parameters: {
-            query?: {
+            query: {
+                group_id: number;
                 venue_id?: number | null;
                 role_id?: number | null;
                 is_active?: boolean | null;
-                group_id?: number | null;
             };
             header?: never;
             path?: never;
@@ -6254,8 +6214,8 @@ export interface operations {
     };
     venue_staff_counts: {
         parameters: {
-            query?: {
-                group_id?: number | null;
+            query: {
+                group_id: number;
             };
             header?: never;
             path?: never;
@@ -6316,8 +6276,9 @@ export interface operations {
     };
     venue_staff_invite: {
         parameters: {
-            query?: {
-                group_id?: number | null;
+            query: {
+                group_id: number;
+                venue_id?: number | null;
             };
             header?: never;
             path?: never;
@@ -7867,8 +7828,8 @@ export interface operations {
     venue_analytics_dashboard: {
         parameters: {
             query: {
+                group_id: number;
                 venue_id: number;
-                group_id?: number | null;
             };
             header?: never;
             path?: never;

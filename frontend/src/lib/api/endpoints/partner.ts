@@ -15,16 +15,16 @@ import type {
  *
  * Every route needs a token, and the backend checks the caller's employment row
  * (`venue_staff`) on each request rather than a claim in the token, so a role
- * change takes effect immediately. Which chain a request concerns is the same
- * fact, so no `group_id` travels — the server derives it from the token.
+ * change takes effect immediately.
  */
 
 export const partnerKeys = {
-  branches: () => ["partner", "branches"] as const,
-  dashboard: (venueId: number) => ["partner", "dashboard", venueId] as const,
+  branches: (groupId: number) => ["partner", "branches", groupId] as const,
+  dashboard: (groupId: number, venueId: number) =>
+    ["partner", "dashboard", groupId, venueId] as const,
   dayBookings: (venueId: number, day: string) => ["partner", "bookings", venueId, day] as const,
-  staff: () => ["partner", "staff"] as const,
-  staffCounts: () => ["partner", "staff-counts"] as const,
+  staff: (groupId: number) => ["partner", "staff", groupId] as const,
+  staffCounts: (groupId: number) => ["partner", "staff-counts", groupId] as const,
   roles: () => ["partner", "staff-roles"] as const,
 };
 
@@ -33,18 +33,25 @@ export interface GroupWithBranches {
   branches: Branch[];
 }
 
-export function getMyBranches(signal?: AbortSignal): Promise<GroupWithBranches> {
-  return apiFetch<GroupWithBranches>("/v1/venue/groups/me/branches", {
+export function getGroupWithBranches(
+  groupId: number,
+  signal?: AbortSignal,
+): Promise<GroupWithBranches> {
+  return apiFetch<GroupWithBranches>(`/v1/venue/groups/${groupId}/branches`, {
     auth: "required",
     signal,
   });
 }
 
-export function getDashboard(venueId: number, signal?: AbortSignal): Promise<Dashboard> {
+export function getDashboard(
+  groupId: number,
+  venueId: number,
+  signal?: AbortSignal,
+): Promise<Dashboard> {
   return apiFetch<Dashboard>("/v1/venue/analytics/dashboard", {
     auth: "required",
     signal,
-    query: { venue_id: venueId },
+    query: { group_id: groupId, venue_id: venueId },
   });
 }
 
@@ -83,14 +90,22 @@ export function rejectBooking(
   });
 }
 
-export function listStaff(signal?: AbortSignal): Promise<StaffMember[]> {
-  return apiFetch<StaffMember[]>("/v1/venue/staff", { auth: "required", signal });
+export function listStaff(groupId: number, signal?: AbortSignal): Promise<StaffMember[]> {
+  return apiFetch<StaffMember[]>("/v1/venue/staff", {
+    auth: "required",
+    signal,
+    query: { group_id: groupId },
+  });
 }
 
 export type StaffCounts = components["schemas"]["StaffCountsRead"];
 
-export function getStaffCounts(signal?: AbortSignal): Promise<StaffCounts> {
-  return apiFetch<StaffCounts>("/v1/venue/staff/counts", { auth: "required", signal });
+export function getStaffCounts(groupId: number, signal?: AbortSignal): Promise<StaffCounts> {
+  return apiFetch<StaffCounts>("/v1/venue/staff/counts", {
+    auth: "required",
+    signal,
+    query: { group_id: groupId },
+  });
 }
 
 export function listStaffRoles(signal?: AbortSignal): Promise<StaffRole[]> {
@@ -104,13 +119,19 @@ export type StaffInvitationCreated = components["schemas"]["StaffInvitationCreat
  * The login and temporary password exist only in this response — the owner
  * hands them to the person directly. Nothing re-reads them later.
  *
- * The optional `venue_id` in the body is the branch the new person is assigned
- * to; a venue-scoped role (waiter, chef) requires one.
+ * `venueId` in the query is what the `staff.manage` permission is checked
+ * against; the optional `venue_id` in the body is the branch the new person is
+ * assigned to (null = the whole chain).
  */
-export function inviteStaff(input: StaffInvitationInput): Promise<StaffInvitationCreated> {
+export function inviteStaff(
+  groupId: number,
+  venueId: number,
+  input: StaffInvitationInput,
+): Promise<StaffInvitationCreated> {
   return apiFetch<StaffInvitationCreated>("/v1/venue/staff/invitations", {
     method: "POST",
     auth: "required",
+    query: { group_id: groupId, venue_id: venueId },
     body: input,
   });
 }

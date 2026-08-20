@@ -109,15 +109,6 @@ class StaffService:
                 return candidate
         raise PermissionDeniedError("Siz bu muassasada ishlamaysiz")
 
-    async def group_ids_for(self, user_id: int) -> set[int]:
-        """Every chain the person actively works in.
-
-        For almost everyone this is one id — an owner's employment row is written
-        by onboarding itself — which is what lets `group_id` disappear from the
-        partner API: the token says who is calling, this says which chain that is.
-        """
-        return {row.venue_group_id for row in await self.staff.list_for_user(user_id)}
-
     async def list_for_group(
         self,
         group_id: int,
