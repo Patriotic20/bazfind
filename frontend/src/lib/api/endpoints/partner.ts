@@ -23,9 +23,15 @@ export const partnerKeys = {
   dashboard: (groupId: number, venueId: number) =>
     ["partner", "dashboard", groupId, venueId] as const,
   dayBookings: (venueId: number, day: string) => ["partner", "bookings", venueId, day] as const,
+  rangeBookings: (venueId: number, from: string, days: number) =>
+    ["partner", "bookings-range", venueId, from, days] as const,
   staff: (groupId: number) => ["partner", "staff", groupId] as const,
   staffCounts: (groupId: number) => ["partner", "staff-counts", groupId] as const,
   roles: () => ["partner", "staff-roles"] as const,
+  menuCategories: (groupId: number, venueId: number | null) =>
+    ["partner", "menu-categories", groupId, venueId] as const,
+  menuItems: (venueId: number, categoryId: number | null) =>
+    ["partner", "menu-items", venueId, categoryId] as const,
 };
 
 export interface GroupWithBranches {
@@ -87,6 +93,35 @@ export function rejectBooking(
     auth: "required",
     query: { venue_id: venueId },
     body: { reason: reason ?? null },
+  });
+}
+
+export type MenuCategory = components["schemas"]["MenuCategoryRead"];
+export type PartnerMenuItem = components["schemas"]["MenuItemListItem"];
+
+/** Categories belong to the chain; the count next to each is computed live. */
+export function listMenuCategories(
+  groupId: number,
+  venueId: number | null,
+  signal?: AbortSignal,
+): Promise<MenuCategory[]> {
+  return apiFetch<MenuCategory[]>("/v1/venue/menu/categories", {
+    auth: "required",
+    signal,
+    query: { group_id: groupId, venue_id: venueId ?? undefined },
+  });
+}
+
+/** Only what this branch serves, priced with its own override when it has one. */
+export function listMenuItems(
+  venueId: number,
+  categoryId: number | null,
+  signal?: AbortSignal,
+): Promise<PartnerMenuItem[]> {
+  return apiFetch<PartnerMenuItem[]>("/v1/venue/menu/items", {
+    auth: "required",
+    signal,
+    query: { venue_id: venueId, category_id: categoryId ?? undefined },
   });
 }
 
