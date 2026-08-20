@@ -42,6 +42,7 @@ import {
   Trash2,
   Sun,
   Moon,
+  ImagePlus,
 } from "lucide-react";
 import Navbar from "@/components/navbar";
 
@@ -154,6 +155,13 @@ export default function LoginPage() {
   const [venueName, setVenueName] = useState("");
   const [venueType, setVenueType] = useState<"restaurant" | "toyxona">("restaurant");
   const [venueHours, setVenueHours] = useState("09:00 - 23:00");
+  // The two halves of `venueHours`. Time inputs, not free text: "har kuni
+  // ertalabdan" is a mood, not an opening hour a booking system can check.
+  const [hoursOpen, setHoursOpen] = useState("09:00");
+  const [hoursClose, setHoursClose] = useState("23:00");
+  // Photos the person picked from their own device, as data URLs so the
+  // previews survive re-renders. They join the stock grid below.
+  const [customImages, setCustomImages] = useState<string[]>([]);
   const [venueCapacity, setVenueCapacity] = useState("");
   const [venuePrice, setVenuePrice] = useState("");
   const [venueImages, setVenueImages] = useState<string[]>([]);
@@ -3191,7 +3199,7 @@ export default function LoginPage() {
                           </h2>
                         </div>
                         <p className={`text-xs ${isDark ? "text-white/60" : "text-zinc-500"} pl-7`}>
-                          Ishlash soatlarini kiriting (masalan: 09:00 - 23:00)
+                          Ochilish va yopilish vaqtini belgilang
                         </p>
                       </div>
 
@@ -3201,18 +3209,48 @@ export default function LoginPage() {
                         </div>
                       )}
 
-                      <div className="space-y-4 text-left">
-                        <input
-                          type="text"
-                          value={venueHours}
-                          onChange={(e) => setVenueHours(e.target.value)}
-                          placeholder="09:00 - 23:00"
-                          className={`w-full px-4 py-3.5 rounded-2xl border transition-all outline-none ${
-                            isDark 
-                              ? "bg-[#2C2C2E]/60 border-white/10 text-white focus:border-[#FF5A00]" 
-                              : "bg-white border-zinc-200 text-black focus:border-[#FF5A00]"
-                          } text-sm font-bold tracking-wide`}
-                        />
+                      <div className="flex items-center gap-3 text-left">
+                        <div className="flex-1 space-y-1.5">
+                          <label className={`text-xs font-bold ${isDark ? "text-white/60" : "text-zinc-500"}`}>
+                            Ochilish
+                          </label>
+                          <input
+                            type="time"
+                            value={hoursOpen}
+                            onChange={(e) => {
+                              setHoursOpen(e.target.value);
+                              if (e.target.value && hoursClose) {
+                                setVenueHours(`${e.target.value} - ${hoursClose}`);
+                              }
+                            }}
+                            className={`w-full px-4 py-3.5 rounded-2xl border transition-all outline-none ${
+                              isDark
+                                ? "bg-[#2C2C2E]/60 border-white/10 text-white focus:border-[#FF5A00] [color-scheme:dark]"
+                                : "bg-white border-zinc-200 text-black focus:border-[#FF5A00]"
+                            } text-sm font-bold tracking-wide`}
+                          />
+                        </div>
+                        <span className={`mt-6 font-black ${isDark ? "text-white/40" : "text-zinc-400"}`}>–</span>
+                        <div className="flex-1 space-y-1.5">
+                          <label className={`text-xs font-bold ${isDark ? "text-white/60" : "text-zinc-500"}`}>
+                            Yopilish
+                          </label>
+                          <input
+                            type="time"
+                            value={hoursClose}
+                            onChange={(e) => {
+                              setHoursClose(e.target.value);
+                              if (hoursOpen && e.target.value) {
+                                setVenueHours(`${hoursOpen} - ${e.target.value}`);
+                              }
+                            }}
+                            className={`w-full px-4 py-3.5 rounded-2xl border transition-all outline-none ${
+                              isDark
+                                ? "bg-[#2C2C2E]/60 border-white/10 text-white focus:border-[#FF5A00] [color-scheme:dark]"
+                                : "bg-white border-zinc-200 text-black focus:border-[#FF5A00]"
+                            } text-sm font-bold tracking-wide`}
+                          />
+                        </div>
                       </div>
                     </div>
 
@@ -3220,15 +3258,20 @@ export default function LoginPage() {
                       <button
                         type="button"
                         onClick={() => {
-                          if (!venueHours.trim()) {
-                            setError("Iltimos ish tartibini kiriting!");
+                          if (!hoursOpen || !hoursClose) {
+                            setError("Ochilish va yopilish vaqtini belgilang!");
+                            return;
+                          }
+                          if (hoursOpen === hoursClose) {
+                            setError("Ochilish va yopilish vaqti bir xil bo'lishi mumkin emas!");
                             return;
                           }
                           setError("");
+                          setVenueHours(`${hoursOpen} - ${hoursClose}`);
                           handleNextStep();
                         }}
                         className={`w-full py-4 rounded-full font-bold text-sm tracking-wide transition-all active:scale-98 shadow-lg ${
-                          venueHours.trim()
+                          hoursOpen && hoursClose
                             ? "bg-[#FF5A00] text-white shadow-[#FF5A00]/25 cursor-pointer hover:bg-[#E04F00]"
                             : isDark
                               ? "bg-white/10 text-white/30 cursor-not-allowed"
@@ -3395,7 +3438,7 @@ export default function LoginPage() {
                           </h2>
                         </div>
                         <p className={`text-xs ${isDark ? "text-white/60" : "text-zinc-500"} pl-7`}>
-                          Jozibali rasmlardan kamida bittasini tanlang
+                          {"O'z rasmlaringizni yuklang yoki tayyorlaridan tanlang"}
                         </p>
                       </div>
 
@@ -3405,9 +3448,45 @@ export default function LoginPage() {
                         </div>
                       )}
 
-                      {/* Mock Image Grid */}
+                      {/* Image grid: the upload tile, the person's own photos, then the stock ones */}
                       <div className="grid grid-cols-3 gap-2">
+                        <label
+                          className={`aspect-square rounded-xl border-2 border-dashed flex flex-col items-center justify-center gap-1.5 cursor-pointer transition-all hover:border-[#FF5A00] ${
+                            isDark
+                              ? "border-white/20 text-white/50 hover:text-[#FF5A00]"
+                              : "border-zinc-300 text-zinc-400 hover:text-[#FF5A00]"
+                          }`}
+                        >
+                          <ImagePlus className="h-6 w-6" />
+                          <span className="text-[10px] font-bold">Yuklash</span>
+                          <input
+                            type="file"
+                            accept="image/*"
+                            multiple
+                            className="hidden"
+                            onChange={(e) => {
+                              const files = Array.from(e.target.files ?? []).slice(0, 9);
+                              e.target.value = "";
+                              for (const file of files) {
+                                const reader = new FileReader();
+                                reader.onload = () => {
+                                  const url = reader.result as string;
+                                  setCustomImages((prev) =>
+                                    prev.includes(url) ? prev : [...prev, url],
+                                  );
+                                  // A photo someone bothered to upload is a photo
+                                  // they want used — selected straight away.
+                                  setVenueImages((prev) =>
+                                    prev.includes(url) ? prev : [...prev, url],
+                                  );
+                                };
+                                reader.readAsDataURL(file);
+                              }
+                            }}
+                          />
+                        </label>
                         {[
+                          ...customImages,
                           "https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=200&q=80",
                           "https://images.unsplash.com/photo-1519167758481-83f550bb49b3?w=200&q=80",
                           "https://images.unsplash.com/photo-1552566626-52f8b828add9?w=200&q=80",
