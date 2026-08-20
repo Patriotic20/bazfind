@@ -96,6 +96,34 @@ export function rejectBooking(
   });
 }
 
+export type VenueGroupWithBranchCreate = components["schemas"]["VenueGroupWithBranchCreate"];
+
+/**
+ * The chain, its first branch and the caller's owner row — one transaction.
+ * One chain per owner: a second call answers 409 `group_already_exists`.
+ */
+export function createVenueGroup(input: VenueGroupWithBranchCreate): Promise<GroupWithBranches> {
+  return apiFetch<GroupWithBranches>("/v1/venue/groups", {
+    method: "POST",
+    auth: "required",
+    body: input,
+  });
+}
+
+export type WorkingHoursInput = components["schemas"]["WorkingHoursCreate"];
+
+/** All seven days rewritten at once, so a removed day cannot linger. */
+export function replaceWorkingHours(
+  venueId: number,
+  days: WorkingHoursInput[],
+): Promise<unknown> {
+  return apiFetch<unknown>(`/v1/venue/venues/${venueId}/working-hours`, {
+    method: "PUT",
+    auth: "required",
+    body: { days },
+  });
+}
+
 export type MenuCategory = components["schemas"]["MenuCategoryRead"];
 export type PartnerMenuItem = components["schemas"]["MenuItemListItem"];
 

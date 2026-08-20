@@ -13,6 +13,8 @@ import {
   register,
   staffLogin,
 } from "@/lib/api/endpoints/auth";
+import { listDistricts, listRegions } from "@/lib/api/endpoints/geo";
+import { createVenueGroup, replaceWorkingHours } from "@/lib/api/endpoints/partner";
 import { ApiError, type TokenPair } from "@/lib/api/types";
 import { useSession } from "@/lib/hooks/use-session";
 import {
@@ -909,71 +911,113 @@ export default function LoginPage() {
     }, 1000);
   };
 
-  const handleCompletePartnerRegistration = () => {
-    // Generate new account credentials
-    const newAccount = {
-      username: phone.trim(),
-      password: password.trim(),
-      role: "partner" as const,
-      name: venueName.trim(),
-      phone: "+998" + phone.trim(),
-      location: `${reg}, ${dist}`
-    };
+  const handleCompletePartnerRegistration = async () => {
+    // The prototype wrote all of this to localStorage and called it a
+    // registration; /admin then asked the server, heard "no chain", and
+    // bounced straight back to /login. Now it is real: an account, the chain
+    // with its first branch, and the working hours — then the panel.
+    setLoading(true);
+    setError("");
+    const fullPhone = "+998" + phone.trim();
+    const venueType = accountType === "toyxona" ? ("toyxona" as const) : ("restoran" as const);
 
-    // Save to accounts list
-    const accountsRaw = localStorage.getItem("registeredAccounts");
-    let accountsList = [];
-    if (accountsRaw) {
+    try {
+      // 1. The account. An already-registered number is not a failure — it is
+      //    a sign-in with the password just typed.
       try {
-        accountsList = JSON.parse(accountsRaw);
-      } catch (err) {}
-    }
-    accountsList.push(newAccount);
-    localStorage.setItem("registeredAccounts", JSON.stringify(accountsList));
+        await register({
+          phone: fullPhone,
+          first_name: venueName.trim() || "Egasi",
+          last_name: "(egasi)",
+          password: password.trim() || null,
+        });
+      } catch (err) {
+        if (err instanceof ApiError && (err.code === "phone_already_registered" || err.status === 409)) {
+          await login(fullPhone, password.trim() || undefined);
+        } else {
+          throw err;
+        }
+      }
+      await queryClient.invalidateQueries({ queryKey: authKeys.me() });
 
-    // Save to partner venues list
-    const priceNumVal = Number(venuePrice.replace(/\D/g, "")) || 4000000;
-    const capacityNumVal = Number(venueCapacity.replace(/\D/g, "")) || 150;
-    const formattedPriceText = priceNumVal.toLocaleString("uz-UZ") + " UZS dan";
+      // 2. The district. The picker holds display names; the venue row needs a
+      //    seeded district id, so match loosely and fall back to the region's
+      //    first district rather than blocking registration on spelling.
+      const clean = (value: string) =>
+        value.toLowerCase().replace(/['\u2019\u02bb\u02bc`]/g, "").split(/\s|\./)[0] ?? "";
+      const regions = await listRegions();
+      const region = regions.find((r) => clean(r.name).startsWith(clean(reg))) ?? regions[0];
+      const districts = await listDistricts(region.id);
+      const district = districts.find((d) => clean(d.name).startsWith(clean(dist))) ?? districts[0];
 
-    const newVenue = {
-      id: "partner-user-" + Date.now(),
-      name: venueName.trim(),
-      location: `${reg}, ${dist}`,
-      capacity: `${capacityNumVal} kishi`,
-      capacityNum: capacityNumVal,
-      priceText: formattedPriceText,
-      priceNum: priceNumVal,
-      rating: 5.0,
-      category: accountType === "restaurant" ? "restoran" as const : "toyxona" as const,
-      emoji: accountType === "restaurant" ? "🍽️" : "🏰",
-      tags: ["Yangi", "Premium"],
-    };
-
-    const storedVenuesRaw = localStorage.getItem("partnerVenues");
-    let partnerVenuesList = [];
-    if (storedVenuesRaw) {
+      // 3. The chain and its first branch. 409 means this owner already has
+      //    one — then the panel is already theirs.
+      const capacityNum = Number(venueCapacity.replace(/\D/g, "")) || 150;
+      const priceNum = Number(venuePrice.replace(/\D/g, "")) || null;
+      let branchId: number | null = null;
       try {
-        partnerVenuesList = JSON.parse(storedVenuesRaw);
-      } catch (err) {}
+        const created = await createVenueGroup({
+          group: {
+            primary_venue_type: venueType,
+            name: venueName.trim(),
+            default_currency: "UZS",
+          },
+          branch: {
+            district_id: district.id,
+            street: "Ko'rsatilmagan",
+            house_number: "-",
+            latitude: district.latitude,
+            longitude: district.longitude,
+            phone: fullPhone,
+            name: venueName.trim(),
+            venue_type: venueType,
+            total_seats: capacityNum,
+            capacity_max: capacityNum,
+            base_price: priceNum,
+            currency: "UZS",
+            min_advance_booking_days: 1,
+            late_grace_minutes: 40,
+            requires_deposit: false,
+          },
+        });
+        branchId = created.branches[0]?.id ?? null;
+      } catch (err) {
+        if (!(err instanceof ApiError && (err.code === "group_already_exists" || err.status === 409))) {
+          throw err;
+        }
+      }
+
+      // 4. The hours from the "Ish tartibi" step, same for every day.
+      if (branchId !== null && hoursOpen && hoursClose) {
+        try {
+          await replaceWorkingHours(
+            branchId,
+            Array.from({ length: 7 }, (_, weekday) => ({
+              weekday,
+              opens_at: hoursOpen,
+              closes_at: hoursClose,
+              is_closed: false,
+            })),
+          );
+        } catch {
+          // Hours are editable later; their failure must not eat the account.
+        }
+      }
+
+      await queryClient.invalidateQueries({ queryKey: authKeys.myGroup() });
+      await queryClient.fetchQuery({ queryKey: authKeys.myGroup(), queryFn: () => getMyGroup() });
+
+      setIsRegistered(true);
+      setRole("partner");
+      setFullName(venueName.trim());
+      showToast("Ro'yxatdan muvaffaqiyatli o'tdingiz!");
+      router.push("/admin");
+    } catch (err) {
+      setError(describe(err));
+      setStep("partner_password");
+    } finally {
+      setLoading(false);
     }
-    partnerVenuesList.push(newVenue);
-    localStorage.setItem("partnerVenues", JSON.stringify(partnerVenuesList));
-
-    // Save session
-    localStorage.setItem("fullName", venueName.trim());
-    localStorage.setItem("phone", "+998" + phone);
-    localStorage.setItem("location", `${reg}, ${dist}`);
-    localStorage.setItem("userRole", "partner");
-    localStorage.setItem("isRegistered", "true");
-
-    setIsRegistered(true);
-    setRole("partner");
-    setFullName(venueName.trim());
-    setPhone("+998" + phone);
-
-    showToast("Ro'yxatdan muvaffaqiyatli o'tdingiz!");
-    router.push("/admin");
   };
 
   const menuItems = [
