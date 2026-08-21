@@ -10,6 +10,7 @@ import {
   checkPhone,
   getMyGroup,
   login,
+  type PhoneCheckResult,
   register,
   staffLogin,
 } from "@/lib/api/endpoints/auth";
@@ -193,6 +194,11 @@ export default function LoginPage() {
   const [isNumLayout, setIsNumLayout] = useState(false);
   const [reg, setReg] = useState("");
   const [dist, setDist] = useState("");
+  // Hamkor kiritgan raqam haqida server nima deganini eslab qolamiz: 6-qadamda
+  // so'raladi va keyingi ekranning ham matnini, ham yakunda qaysi yo'l
+  // tanlanishini (`register` yoki `login`) shu javob hal qiladi.
+  // `null` — hali so'ralmagan.
+  const [partnerAccount, setPartnerAccount] = useState<PhoneCheckResult | null>(null);
 
   // Profile Edit Mode States
   const [isEditing, setIsEditing] = useState(false);
@@ -317,6 +323,44 @@ export default function LoginPage() {
         }
       } else {
         setStep("register_customer_name");
+      }
+    } catch (err) {
+      setError(describe(err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  /**
+   * The same question, asked in the partner wizard — where it was missing.
+   *
+   * The customer flow has always asked the server first. The partner wizard did
+   * not: it collected eight screens, then tried `register`, caught the 409 and
+   * quietly called `login` with the password the person had just invented. For a
+   * number that already had a *different* password that fails at the very end,
+   * with everything already typed in.
+   *
+   * Asking here makes the answer arrive while the phone field is still on
+   * screen, and it decides what the next screen means: invent a password, or
+   * enter the existing one.
+   */
+  const handlePartnerPhoneContinue = async () => {
+    if (phone.length !== 9) {
+      setError("Telefon raqamini to'liq kiriting (9 ta raqam)!");
+      return;
+    }
+    setError("");
+    setLoading(true);
+    try {
+      const result = await checkPhone("+998" + phone.trim());
+      setPartnerAccount(result);
+      if (result.registered && !result.password_required) {
+        // Parolsiz akkaunt: parol ekrani so'raydigan narsa yo'q, raqamning
+        // o'zi kirishga yetadi.
+        setPassword("");
+        setStep(7);
+      } else {
+        setStep("partner_password");
       }
     } catch (err) {
       setError(describe(err));
@@ -794,11 +838,9 @@ export default function LoginPage() {
       }
       setStep(6);
     } else if (step === 6) {
-      if (phone.length < 9) {
-        setError("Telefon raqamini to'liq kiriting!");
-        return;
-      }
-      setStep("partner_password");
+      // Keyingi ekranni serverning javobi tanlaydi, shuning uchun bu qadam
+      // boshqa qadamlar kabi darhol emas, asinxron o'tadi.
+      void handlePartnerPhoneContinue();
     } else if (step === "partner_password") {
       if (!password.trim()) {
         setError("Parol kiriting!");
@@ -955,19 +997,31 @@ export default function LoginPage() {
     const venueType = accountType === "toyxona" ? ("toyxona" as const) : ("restoran" as const);
 
     try {
-      // 1. The account. An already-registered number is not a failure — it is
-      //    a sign-in with the password just typed.
-      try {
-        await register({
-          phone: fullPhone,
-          first_name: venueName.trim() || "Egasi",
-          last_name: "(egasi)",
-          password: password.trim() || null,
-        });
-      } catch (err) {
-        if (err instanceof ApiError && (err.code === "phone_already_registered" || err.status === 409)) {
-          await login(fullPhone, password.trim() || undefined);
-        } else {
+      // 1. The account. Which of the two it is was settled at the phone step by
+      //    `phone-check`, so there is no "try register, catch the 409, quietly
+      //    log in" guess here any more — that guess used the password the person
+      //    had invented for a *new* account, which is not the password of the
+      //    existing one, and it failed only after eight screens were filled in.
+      if (partnerAccount?.registered) {
+        await login(fullPhone, partnerAccount.password_required ? password.trim() : undefined);
+      } else {
+        try {
+          await register({
+            phone: fullPhone,
+            first_name: venueName.trim() || "Egasi",
+            last_name: "(egasi)",
+            password: password.trim() || null,
+          });
+        } catch (err) {
+          // The number was taken between the phone step and this submit. The
+          // password on screen was invented for a new account, so it is not the
+          // existing one's — say so instead of failing a silent sign-in with it.
+          if (err instanceof ApiError && (err.code === "phone_already_registered" || err.status === 409)) {
+            setPartnerAccount({ phone: fullPhone, registered: true, password_required: true });
+            setError("Bu raqam endigina ro'yxatdan o'tdi. Mavjud parolingiz bilan kiring.");
+            setStep("partner_password");
+            return;
+          }
           throw err;
         }
       }
@@ -3679,14 +3733,7 @@ export default function LoginPage() {
                     <div className="space-y-4">
                       <button
                         type="button"
-                        onClick={() => {
-                          if (phone.length !== 9) {
-                            setError("Telefon raqamini to'liq kiriting (9 ta raqam)!");
-                            return;
-                          }
-                          setError("");
-                          handleNextStep();
-                        }}
+                        onClick={() => void handlePartnerPhoneContinue()}
                         className={`w-full py-4 rounded-full font-bold text-sm tracking-wide transition-all active:scale-98 shadow-lg ${
                           phone.length === 9
                             ? "bg-[#FF5A00] text-white shadow-[#FF5A00]/25 cursor-pointer hover:bg-[#E04F00]"
@@ -3715,11 +3762,13 @@ export default function LoginPage() {
                             <ChevronLeft className="h-7 w-7 stroke-[2.5px]" />
                           </button>
                           <h2 className={`text-2xl font-extrabold ${isDark ? "text-white" : "text-black"}`}>
-                            Parol yarating
+                            {partnerAccount?.registered ? "Parolingizni kiriting" : "Parol yarating"}
                           </h2>
                         </div>
                         <p className={`text-xs ${isDark ? "text-white/60" : "text-zinc-500"} pl-7`}>
-                          Akkauntingiz uchun xavfsiz parol kiriting
+                          {partnerAccount?.registered
+                            ? "Bu raqam allaqachon ro'yxatdan o'tgan — mavjud parolingizni kiriting"
+                            : "Akkauntingiz uchun xavfsiz parol kiriting"}
                         </p>
                       </div>
 
@@ -3748,7 +3797,15 @@ export default function LoginPage() {
                       <button
                         type="button"
                         onClick={() => {
-                          if (password.length < 6) {
+                          if (!password.trim()) {
+                            setError("Parolni kiriting!");
+                            return;
+                          }
+                          // Uzunlik faqat yangi parol uchun. Mavjud akkauntning
+                          // eski paroli bu qoidadan qisqa bo'lishi mumkin, va uni
+                          // shu yerda rad etish odamni o'z akkauntiga
+                          // kiritmaslikdan boshqa hech narsa qilmasdi.
+                          if (!partnerAccount?.registered && password.length < 6) {
                             setError("Parol kamida 6 ta belgidan iborat bo'lishi kerak!");
                             return;
                           }
@@ -3756,14 +3813,16 @@ export default function LoginPage() {
                           handleNextStep();
                         }}
                         className={`w-full py-4 rounded-full font-bold text-sm tracking-wide transition-all active:scale-98 shadow-lg ${
-                          password.trim().length >= 6
+                          (partnerAccount?.registered
+                            ? password.trim().length > 0
+                            : password.trim().length >= 6)
                             ? "bg-[#FF5A00] text-white shadow-[#FF5A00]/25 cursor-pointer hover:bg-[#E04F00]"
                             : isDark
                               ? "bg-white/10 text-white/30 cursor-not-allowed"
                               : "bg-[#FF5A00]/20 text-[#FF5A00]/45 cursor-not-allowed"
                         }`}
                       >
-                        Parolni tasdiqlash
+                        {partnerAccount?.registered ? "Kirish" : "Parolni tasdiqlash"}
                       </button>
                     </div>
                   </div>
