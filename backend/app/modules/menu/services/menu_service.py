@@ -4,7 +4,6 @@ from decimal import Decimal
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import NotFoundError
-from app.modules.localization.repositories import LanguageRepository
 from app.modules.menu.enums import MenuItemStatus
 from app.modules.menu.models import (
     MenuCategory,
@@ -39,7 +38,6 @@ class MenuService:
         self.session = session
         self.categories = MenuCategoryRepository(session)
         self.items = MenuItemRepository(session)
-        self.languages = LanguageRepository(session)
         self.staff = StaffService(session)
 
     async def list_categories(

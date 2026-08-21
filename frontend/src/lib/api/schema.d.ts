@@ -24,26 +24,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/languages": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Tillar ro'yxati
-         * @description Til sozlamalari ekranida aynan shu tillar taklif qilinadi.
-         */
-        get: operations["localization_list_languages"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/regions": {
         parameters: {
             query?: never;
@@ -2606,21 +2586,6 @@ export interface components {
              */
             added_at: string;
         };
-        /** LanguageRead */
-        LanguageRead: {
-            /** Id */
-            id: number;
-            /** Code */
-            code: string;
-            /** Name Native */
-            name_native: string;
-            /** Name English */
-            name_english: string;
-            /** Flag Url */
-            flag_url?: string | null;
-            /** Sort Order */
-            sort_order: number;
-        };
         /** MenuCategoryCreate */
         MenuCategoryCreate: {
             /** Name */
@@ -3158,8 +3123,6 @@ export interface components {
             last_name: string;
             /** Password */
             password?: string | null;
-            /** Language Id */
-            language_id?: number | null;
             /** District Id */
             district_id?: number | null;
         };
@@ -3669,8 +3632,6 @@ export interface components {
             email?: string | null;
             /** Avatar Url */
             avatar_url?: string | null;
-            /** Language Id */
-            language_id?: number | null;
             /** District Id */
             district_id?: number | null;
             theme?: components["schemas"]["UserTheme"] | null;
@@ -3692,8 +3653,6 @@ export interface components {
             email?: string | null;
             /** Avatar Url */
             avatar_url?: string | null;
-            /** Language Id */
-            language_id: number;
             /** District Id */
             district_id?: number | null;
             role: components["schemas"]["UserRole"];
@@ -4368,26 +4327,6 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
-                };
-            };
-        };
-    };
-    localization_list_languages: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["LanguageRead"][];
                 };
             };
         };
@@ -6181,10 +6120,10 @@ export interface operations {
     venue_staff_list: {
         parameters: {
             query: {
-                group_id: number;
                 venue_id?: number | null;
                 role_id?: number | null;
                 is_active?: boolean | null;
+                group_id: number;
             };
             header?: never;
             path?: never;

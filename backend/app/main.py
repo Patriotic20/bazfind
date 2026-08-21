@@ -54,13 +54,6 @@ app = FastAPI(
     # Declared in the order `app/core/router.py` includes them, so the Swagger
     # sections follow the module order instead of first-use order.
     openapi_tags=[
-        {
-            "name": "localization",
-            "description": (
-                "Interfeys tili ro'yxati. Kontent faqat o'zbek tilida — bu ro'yxat "
-                "foydalanuvchining `users.language_id` sozlamasi uchun."
-            ),
-        },
         {"name": "geo", "description": "Viloyatlar va tumanlar."},
         {"name": "catalog", "description": "Muassasa turlari va qulayliklar."},
         {"name": "auth", "description": "Ro'yxatdan o'tish, kirish va token yangilash."},

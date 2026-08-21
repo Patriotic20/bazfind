@@ -94,6 +94,28 @@ const LANGUAGES: Language[] = [
   { code: "uz", name: "Uzbek", nativeName: "O'zbekcha", flag: "/icons/uzb.png" },
 ];
 
+/**
+ * Interfeys tili shu qurilmada yashaydi, serverda emas.
+ *
+ * Backend `languages` jadvalidan va `users.language_id` ustunidan voz kechdi:
+ * kontent tarjimalar yig'ishtirilganidan beri faqat o'zbekcha, ya'ni jadval API
+ * bajara olmaydigan tanlovni nomlab turgan edi. Ro'yxat allaqachon shu yerda —
+ * endi tanlovning o'zi ham shu yerda saqlanadi.
+ */
+const LANGUAGE_KEY = "bazmly.language";
+
+/** Saqlangan til, yoki `uz`. Server tomonida ham, buzilgan qiymatda ham `uz`. */
+function readStoredLanguage(): string {
+  if (typeof window === "undefined") return "uz";
+  try {
+    const stored = window.localStorage.getItem(LANGUAGE_KEY);
+    return LANGUAGES.some((l) => l.code === stored) ? (stored as string) : "uz";
+  } catch {
+    // Private oynada localStorage ga murojaatning o'zi ham xato beradi.
+    return "uz";
+  }
+}
+
 const FAQS = [
   {
     q: "Qanday qilib restoran yoki marosim zalini bron qilish mumkin?",
@@ -139,7 +161,7 @@ export default function LoginPage() {
   
   // Registration / Profile States
   const [searchLang, setSearchLang] = useState("");
-  const [selectedLang, setSelectedLang] = useState("uz");
+  const [selectedLang, setSelectedLang] = useState(readStoredLanguage);
   const [phone, setPhone] = useState("");
   const [otp, setOtp] = useState(["", "", "", "", "", ""]);
   const [fullName, setFullName] = useState("");
@@ -629,6 +651,17 @@ export default function LoginPage() {
   useEffect(() => {
     setMounted(true);
   }, []);
+
+  // Tanlangan til shu qurilmada qoladi. Sahifa `mounted` bo'lgunicha faqat
+  // placeholder qaytaradi, shuning uchun til bog'liq hech narsa serverda render
+  // qilinmaydi va boshlang'ich qiymatni to'g'ridan-to'g'ri o'qish xavfsiz.
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(LANGUAGE_KEY, selectedLang);
+    } catch {
+      // Private oynada yozib bo'lmaydi — tanlov shu sessiyada baribir ishlaydi.
+    }
+  }, [selectedLang]);
 
   // The profile screen shows whoever the server says is signed in. The five
   // localStorage keys this used to read are gone, along with the plain-text

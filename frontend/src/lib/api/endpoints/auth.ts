@@ -24,7 +24,6 @@ export interface RegisterInput {
   first_name: string;
   last_name: string;
   password?: string | null;
-  language_id?: number | null;
   district_id?: number | null;
 }
 
@@ -118,7 +117,6 @@ export function setPassword(newPassword: string, currentPassword?: string): Prom
 export function completeProfile(input: {
   first_name: string;
   last_name: string;
-  language_id?: number | null;
   district_id?: number | null;
 }): Promise<User> {
   return apiFetch<User>("/v1/auth/complete-profile", {
@@ -132,7 +130,7 @@ export function getMe(signal?: AbortSignal): Promise<User> {
   return apiFetch<User>("/v1/users/me", { auth: "required", signal });
 }
 
-export function updateMe(patch: Partial<Pick<User, "first_name" | "last_name" | "email" | "theme" | "language_id" | "district_id">>): Promise<User> {
+export function updateMe(patch: Partial<Pick<User, "first_name" | "last_name" | "email" | "theme" | "district_id">>): Promise<User> {
   // `UpdateSchema` forbids unknown keys AND rejects an empty body, so callers
   // must send only what changed and must not call this with nothing.
   return apiFetch<User>("/v1/users/me", { method: "PATCH", auth: "required", body: patch });

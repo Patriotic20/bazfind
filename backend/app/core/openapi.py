@@ -25,7 +25,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 # Needed by both apps: a customer and a staff member sign in through the same
 # endpoints and read the same reference data. `services` is the catalog itself —
 # customers read it on a venue page, staff read it to put prices on it.
-SHARED_TAGS = frozenset({"auth", "users", "geo", "catalog", "localization", "services"})
+SHARED_TAGS = frozenset({"auth", "users", "geo", "catalog", "services"})
 
 # Machine-to-machine, not for either frontend. Only the full schema shows it.
 INTERNAL_TAGS = frozenset({"telegram"})

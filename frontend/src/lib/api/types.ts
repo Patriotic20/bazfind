@@ -104,7 +104,6 @@ type Schemas = components["schemas"];
 export type Region = Schemas["RegionRead"];
 export type District = Schemas["DistrictRead"];
 export type NearestDistrict = Schemas["NearestDistrictRead"];
-export type Language = Schemas["LanguageRead"];
 export type TokenPair = Schemas["TokenPair"];
 export type User = Schemas["UserRead"];
 

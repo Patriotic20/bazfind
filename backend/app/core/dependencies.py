@@ -13,7 +13,7 @@ from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from typing import Annotated
 
-from fastapi import Depends, Header, Path, Query, Request, params
+from fastapi import Depends, Path, Query, Request, params
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -30,8 +30,6 @@ from app.core.security import TokenError, decode_access_token
 from app.modules.auth.enums import UserRole, UserStatus
 from app.modules.auth.schemas import UserRead
 from app.modules.auth.services import UserService
-from app.modules.localization.repositories import DEFAULT_LANGUAGE_CODE
-from app.modules.localization.services import LanguageService
 from app.modules.staff.services import StaffService
 
 DEFAULT_LIMIT = 20
@@ -177,40 +175,6 @@ async def get_current_user_optional(
 
 
 OptionalUser = Annotated[UserRead | None, Depends(get_current_user_optional)]
-
-
-async def get_language_id(
-    session: SessionDep,
-    user: OptionalUser,
-    accept_language: Annotated[str | None, Header()] = None,
-) -> int:
-    """`Accept-Language` → the signed-in user's language → uz.
-
-    The header wins over the stored preference because a person switching their
-    phone's language expects the app to follow immediately, without a profile edit.
-    """
-    languages = LanguageService(session)
-
-    if accept_language:
-        # "uz-UZ,uz;q=0.9,ru;q=0.8" -> try each tag in the order offered.
-        for part in accept_language.split(","):
-            tag = part.split(";")[0].strip().split("-")[0].lower()
-            if not tag:
-                continue
-            language = await languages.get_by_code(tag)
-            if language is not None:
-                return language.id
-
-    if user is not None:
-        return user.language_id
-
-    fallback = await languages.get_by_code(DEFAULT_LANGUAGE_CODE)
-    if fallback is None:
-        raise ValidationFailedError("Tillar sozlanmagan")
-    return fallback.id
-
-
-LanguageId = Annotated[int, Depends(get_language_id)]
 
 
 @dataclass(frozen=True, slots=True)
