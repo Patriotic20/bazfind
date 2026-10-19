@@ -69,6 +69,7 @@ class VenueService:
                 requires_deposit=row.venue.requires_deposit,
                 distance_m=row.distance_m,
                 is_open_now=row.is_open_now,
+                cover_url=row.cover_url,
             )
             for row in page.items
         ]

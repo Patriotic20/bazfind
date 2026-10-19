@@ -90,6 +90,7 @@ class VenueListItem(ReadSchema):
     requires_deposit: bool
     distance_m: float | None = None
     is_open_now: bool = False
+    cover_url: str | None = None
 
 
 class VenueRead(ReadSchema):

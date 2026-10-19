@@ -167,6 +167,12 @@ class MenuService:
                 )
             )
 
+        # Offered at the acting branch from the start. The response is read back
+        # through that branch's menu, so without this row a successful create
+        # answered 404 — and the dish never showed up on the menu it was added
+        # from. Step 3 (`set_branch_availability`) still widens or narrows it.
+        await self.items.set_branch_availability(item.id, [venue_id])
+
         await self.session.commit()
         return await self.get_item(item.id, venue_id)
 

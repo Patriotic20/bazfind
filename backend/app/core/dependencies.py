@@ -261,8 +261,9 @@ class PermissionRequired:
     `.slug`, which a closure could not expose.
     """
 
-    def __init__(self, slug: str) -> None:
+    def __init__(self, slug: str, *, venue_in_body: bool = False) -> None:
         self.slug = slug
+        self.venue_in_body = venue_in_body
 
     async def __call__(
         self,
@@ -274,6 +275,8 @@ class PermissionRequired:
         if auth_disabled():
             return user
         raw = request.path_params.get("venue_id", venue_id_query)
+        if self.venue_in_body:
+            raw = await self._reconcile_with_body(request, raw)
         if raw is None:
             raise ValidationFailedError(
                 "Bu amal uchun `venue_id` talab qilinadi",
@@ -281,6 +284,30 @@ class PermissionRequired:
             )
         await StaffService(session).require_permission_in_transaction(user.id, int(raw), self.slug)
         return user
+
+    async def _reconcile_with_body(
+        self, request: Request, raw: int | str | None
+    ) -> int | str | None:
+        """For the routes whose handler acts on the body's `venue_id`.
+
+        Checking any other branch would authorise one venue and act on another,
+        so a query value that disagrees with the body is refused rather than
+        preferred. The body is already buffered by the time dependencies run;
+        reading it again costs nothing.
+        """
+        try:
+            body = await request.json()
+        except ValueError:
+            return raw
+        from_body = body.get("venue_id") if isinstance(body, dict) else None
+        if not isinstance(from_body, int | str):
+            return raw
+        if raw is not None and int(raw) != int(from_body):
+            raise ValidationFailedError(
+                "So'rovdagi `venue_id` qiymatlari bir-biriga mos emas",
+                details={"permission": self.slug},
+            )
+        return from_body
 
 
 class GroupPermissionRequired:
@@ -320,7 +347,7 @@ class GroupPermissionRequired:
         return user
 
 
-def require_permission(slug: str) -> params.Depends:
+def require_permission(slug: str, *, venue_in_body: bool = False) -> params.Depends:
     """`Depends` around `PermissionRequired`, usable two ways.
 
     In a signature it hands back the caller:
@@ -329,8 +356,11 @@ def require_permission(slug: str) -> params.Depends:
 
     In `dependencies=[...]` it just guards, for the routes that never need the
     user. Both resolve the same object, so there is one guard, not two shapes.
+
+    `venue_in_body=True` is for a route whose payload names the branch it acts
+    on; the guard then checks that branch instead of demanding a query copy.
     """
-    guard: params.Depends = Depends(PermissionRequired(slug))
+    guard: params.Depends = Depends(PermissionRequired(slug, venue_in_body=venue_in_body))
     return guard
 
 
