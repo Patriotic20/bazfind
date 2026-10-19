@@ -43,21 +43,10 @@ import {
   BazmlyApiError,
 } from "@/lib/api";
 import { formatAddress, formatMoney, formatRating, formatDiscount, nextDateForWeekday } from "@/lib/format";
+import { slotsFor } from "@/lib/venue-hours";
 
 interface Props {
   params: Promise<{ id: string }>;
-}
-
-/** Times offered in the picker: whole hours this weekday's opening hours allow
- * a two-hour table to fit into. Empty when the venue is closed that day. */
-function slotsFor(hours: VenueWorkingHoursRead[], weekday: number): string[] {
-  const day = hours.find((h) => h.weekday === weekday);
-  if (!day || day.is_closed || !day.opens_at || !day.closes_at) return [];
-  const open = Number(day.opens_at.slice(0, 2)) + (day.opens_at.slice(3, 5) === "00" ? 0 : 1);
-  const close = Number(day.closes_at.slice(0, 2));
-  const slots: string[] = [];
-  for (let hour = open; hour + 2 <= close; hour++) slots.push(`${String(hour).padStart(2, "0")}:00`);
-  return slots;
 }
 
 const PICKER_DAYS = ["Dush", "Sesh", "Chor", "Pay", "Jum", "Shan", "Yak"];
@@ -284,6 +273,9 @@ export default function VenueDetailPage({ params }: Props) {
       img: m.photo_url,
       price: label ? (m.effective_price ? label : `${label} dan`) : "Narx ko'rsatilmagan",
       priceVal: price ? Number(price) : 0,
+      // Pre-orders carry no portion choice, so only a dish with its own price
+      // can be added; one sold by portion is shown but ordered at the venue.
+      orderable: Boolean(m.effective_price),
     };
   });
   const categories = ["Barchasi", ...Array.from(new Set(menuItems.map((m) => m.category_name)))];
@@ -769,7 +761,7 @@ export default function VenueDetailPage({ params }: Props) {
                       </div>
                     )}
 
-                    {qty > 0 ? (
+                    {!food.orderable ? null : qty > 0 ? (
                       <div className="absolute bottom-2 right-2 bg-white border border-zinc-200 text-black rounded-full px-2 py-1 flex items-center gap-2 shadow-md z-10 animate-scale-up">
                         <button
                           type="button"
