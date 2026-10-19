@@ -391,7 +391,12 @@ export interface VenueListItem {
   id: number;
   name: string;
   tagline: string | null;
+  venue_type: VenueTypeSlug;
   status: VenueStatus;
+  street: string;
+  house_number: string;
+  capacity_min: number | null;
+  capacity_max: number | null;
   rating_avg: string;
   reviews_count: number;
   base_price: string | null;
@@ -400,7 +405,7 @@ export interface VenueListItem {
   requires_deposit: boolean;
   distance_m: number | null;
   is_open_now: boolean;
-  cover_url?: string | null;
+  cover_url: string | null;
 }
 
 export interface BranchListItem {

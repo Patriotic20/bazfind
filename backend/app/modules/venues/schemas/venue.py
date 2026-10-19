@@ -81,7 +81,12 @@ class VenueListItem(ReadSchema):
     id: int
     name: str
     tagline: str | None = None
+    venue_type: VenueTypeSlug
     status: VenueStatus
+    street: str
+    house_number: str
+    capacity_min: int | None = None
+    capacity_max: int | None = None
     rating_avg: Decimal
     reviews_count: int
     base_price: Money | None = None
