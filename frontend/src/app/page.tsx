@@ -1,13 +1,13 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import Link from "next/link";
-import { useQuery } from "@tanstack/react-query";
 import {
   Search,
   SlidersHorizontal,
   Star,
   MapPin,
+  Map,
   Compass,
   Wallet,
   ArrowRight,
@@ -20,42 +20,31 @@ import {
   Sun,
   Moon,
   Bookmark,
+  Loader2,
+  Check,
+  Globe,
+  Bell,
+  Sparkles,
+  Users,
 } from "lucide-react";
 import Navbar from "@/components/navbar";
 import { useTheme } from "@/components/theme-provider";
-import { geoKeys, listDistricts } from "@/lib/api/endpoints/geo";
-import { searchVenues, venueKeys, type VenueSearchQuery } from "@/lib/api/endpoints/venues";
-import { formatRating } from "@/lib/api/money";
-import { formatDistance } from "@/lib/format";
-import { useLocation } from "@/lib/location/use-location";
-import type { VenueType } from "@/lib/api/types";
+import { useAuth } from "@/contexts/AuthContext";
+import ToyxonaFlowModal, { ToyxonaVenueData } from "@/components/toyxona-flow-modal";
+import {
+  venueService,
+  geoService,
+  userService,
+  engagementService,
+  VenueListItem,
+  UserAddressRead,
+  VenueTypeSlug,
+  RegionRead,
+  DistrictRead,
+  NotificationRead,
+} from "@/lib/api";
 
-/** The three pills, and the venue type each one filters by. */
-const TABS: { label: string; venueType?: VenueType }[] = [
-  { label: "Umumiy" },
-  { label: "Restoranlar", venueType: "restoran" },
-  { label: "To'yxonalar", venueType: "toyxona" },
-];
-
-/**
- * Why the automatic location came back with nothing, said plainly.
- *
- * `unknown` and `locating` are absent on purpose: neither is a problem, and a
- * line of red text under a button that is still working is its own kind of bug.
- */
-const LOCATION_PROBLEMS: Partial<Record<string, string>> = {
-  refused: "Manzilga ruxsat berilmadi. Brauzer sozlamalaridan ruxsat bering.",
-  unsupported: "Qurilmangiz manzilni aniqlashni qo'llab-quvvatlamaydi.",
-  unavailable: "Manzilni aniqlab bo'lmadi. Qaytadan urinib ko'ring.",
-  "out-of-country": "Siz O'zbekistondan tashqaridasiz — tumanni qo'lda tanlang.",
-};
-
-/**
- * The search response carries no photo — `VenueListItem` has no image field at
- * all — so cards fall back to these by position. Replace the moment the API
- * returns a cover photo in the list.
- */
-const PLACEHOLDER_IMAGES = [
+const FALLBACK_IMAGES = [
   "/images/home/top.png",
   "/images/home/tuyxona1.png",
   "/images/home/tuyxona2.png",
@@ -65,23 +54,56 @@ const PLACEHOLDER_IMAGES = [
 
 export default function WelcomePage() {
   const [mounted, setMounted] = useState(false);
+  const { user, isAuthenticated } = useAuth();
   const [isRegistered, setIsRegistered] = useState(true);
-  const [fullName, setFullName] = useState("Shahzod");
-  const [activeTab, setActiveTab] = useState("Umumiy");
-  const [searchText, setSearchText] = useState("");
-  const [searchQuery, setSearchQuery] = useState("");
+  const [activeTab, setActiveTab] = useState<"Umumiy" | "Restoranlar" | "To'yxonalar">("Umumiy");
   const [currentSlide, setCurrentSlide] = useState(0);
   const [showBookingSuccessToast, setShowBookingSuccessToast] = useState(false);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
   const { theme, toggleTheme } = useTheme();
 
-  // Interactive party/time picker state (2-rasm)
+  // Toyxona Booking Flow Modal State
+  const [showToyxonaModal, setShowToyxonaModal] = useState(false);
+  const [selectedToyxonaVenue, setSelectedToyxonaVenue] = useState<ToyxonaVenueData | null>(null);
+  const [toyxonaModalStep, setToyxonaModalStep] = useState<"detail" | "step1">("detail");
+
+  const handleOpenToyxonaBooking = (venueData?: ToyxonaVenueData, step: "detail" | "step1" = "detail") => {
+    setSelectedToyxonaVenue(venueData || null);
+    setToyxonaModalStep(step);
+    setShowToyxonaModal(true);
+  };
+
+  // Notifications Modal States
+  const [showNotificationsModal, setShowNotificationsModal] = useState(false);
+  const [notifications, setNotifications] = useState<NotificationRead[]>([]);
+  const [unreadCount, setUnreadCount] = useState(0);
+
+  // API dynamic states
+  const [venues, setVenues] = useState<VenueListItem[]>([]);
+  const [loadingVenues, setLoadingVenues] = useState(true);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [guestCountFilter, setGuestCountFilter] = useState<number | null>(null);
+  const [favoriteVenueIds, setFavoriteVenueIds] = useState<Set<number>>(new Set());
+  const [recentLocations, setRecentLocations] = useState<UserAddressRead[]>([]);
+  const [selectedDistrictId, setSelectedDistrictId] = useState<number | null>(null);
+  const [selectedDistrictName, setSelectedDistrictName] = useState<string>("");
+  const [geoDetecting, setGeoDetecting] = useState(false);
+
+  // Geo Regions & Districts
+  const [geoRegions, setGeoRegions] = useState<RegionRead[]>([]);
+  const [activeRegionId, setActiveRegionId] = useState<number | null>(null);
+  const [regionDistrictsMap, setRegionDistrictsMap] = useState<Record<number, DistrictRead[]>>({});
+  const [loadingDistrictsFor, setLoadingDistrictsFor] = useState<number | null>(null);
+  const [locationSearchInput, setLocationSearchInput] = useState("");
+
+  // Interactive party/time picker state
   const [showPartySheet, setShowPartySheet] = useState(false);
   const [showLocationSearch, setShowLocationSearch] = useState(false);
   const [partySize, setPartySize] = useState(5);
   const [selectedDay, setSelectedDay] = useState("Jum");
   const [selectedTime, setSelectedTime] = useState("23:30");
 
-  // --- Drag to Scroll Spinner Picker Logic (2-rasm) ---
+  // Drag to Scroll Spinner Picker Logic
   const dayScrollRef = useRef<HTMLDivElement>(null);
   const [dayDragState, setDayDragState] = useState({ isDown: false, startY: 0, scrollTop: 0 });
 
@@ -91,7 +113,7 @@ export default function WelcomePage() {
     setDayDragState({
       isDown: true,
       startY: e.pageY - el.offsetTop,
-      scrollTop: el.scrollTop
+      scrollTop: el.scrollTop,
     });
   };
 
@@ -106,7 +128,7 @@ export default function WelcomePage() {
   };
 
   const handleDayMouseUpOrLeave = () => {
-    setDayDragState(prev => ({ ...prev, isDown: false }));
+    setDayDragState((prev) => ({ ...prev, isDown: false }));
   };
 
   const handleDayScroll = (e: React.UIEvent<HTMLDivElement>) => {
@@ -127,7 +149,7 @@ export default function WelcomePage() {
     setTimeDragState({
       isDown: true,
       startY: e.pageY - el.offsetTop,
-      scrollTop: el.scrollTop
+      scrollTop: el.scrollTop,
     });
   };
 
@@ -142,7 +164,7 @@ export default function WelcomePage() {
   };
 
   const handleTimeMouseUpOrLeave = () => {
-    setTimeDragState(prev => ({ ...prev, isDown: false }));
+    setTimeDragState((prev) => ({ ...prev, isDown: false }));
   };
 
   const handleTimeScroll = (e: React.UIEvent<HTMLDivElement>) => {
@@ -171,14 +193,38 @@ export default function WelcomePage() {
         }
       }, 50);
     }
-  }, [showPartySheet]);
+  }, [showPartySheet, selectedDay, selectedTime]);
 
   const BANNERS = [
     "/images/home/adv1.png",
     "/images/home/top.png",
     "/images/home/tuyxona2.png",
-    "/images/home/tuyxona3.png"
+    "/images/home/tuyxona3.png",
   ];
+
+  // Fetch Venues from Backend
+  const loadVenues = useCallback(async () => {
+    setLoadingVenues(true);
+    try {
+      let vType: VenueTypeSlug | undefined;
+      if (activeTab === "Restoranlar") vType = "restoran";
+      if (activeTab === "To'yxonalar") vType = "toyxona";
+
+      const res = await venueService.searchVenues({
+        query: searchQuery.trim() || undefined,
+        venue_type: vType,
+        district_id: selectedDistrictId || undefined,
+        guest_count: guestCountFilter || undefined,
+        limit: 20,
+      });
+      setVenues(res.items || []);
+    } catch (err) {
+      console.warn("Venues fetch fallback:", err);
+      setVenues([]);
+    } finally {
+      setLoadingVenues(false);
+    }
+  }, [activeTab, searchQuery, selectedDistrictId, guestCountFilter]);
 
   useEffect(() => {
     setMounted(true);
@@ -187,8 +233,6 @@ export default function WelcomePage() {
       setIsRegistered(false);
     } else {
       setIsRegistered(true);
-      setFullName(localStorage.getItem("fullName") || "Shahzod");
-      localStorage.setItem("isRegistered", "true");
     }
 
     // Check URL parameters client-side
@@ -202,6 +246,63 @@ export default function WelcomePage() {
     }
   }, []);
 
+  // Fetch recent locations & favorites if user is logged in
+  useEffect(() => {
+    if (isAuthenticated && user) {
+      userService.listRecentLocations()
+        .then((locs) => setRecentLocations(locs || []))
+        .catch(() => {});
+      engagementService.getFavorites()
+        .then((favs) => {
+          setFavoriteVenueIds(new Set((favs || []).map((f) => (f as any).venue_id || f.venue?.id).filter(Boolean)));
+        })
+        .catch(() => {});
+    }
+  }, [isAuthenticated, user]);
+
+  // Notifications fetch
+  useEffect(() => {
+    if (isAuthenticated && user) {
+      engagementService.getUnreadNotificationsCount()
+        .then((cnt) => setUnreadCount(cnt || 0))
+        .catch(() => {});
+      engagementService.getNotifications(10)
+        .then((res) => setNotifications(res.items || []))
+        .catch(() => {});
+    }
+  }, [isAuthenticated, user]);
+
+  // Hide global bottom bar when Notifications or Sheets are open
+  useEffect(() => {
+    const bottomNav = document.getElementById("global-bottom-nav");
+    if (bottomNav) {
+      if (showNotificationsModal || showPartySheet || showLocationSearch) {
+        bottomNav.style.transform = "translateY(150%)";
+        bottomNav.style.opacity = "0";
+        bottomNav.style.pointerEvents = "none";
+      } else {
+        bottomNav.style.transform = "translateY(0)";
+        bottomNav.style.opacity = "1";
+        bottomNav.style.pointerEvents = "auto";
+      }
+    }
+    return () => {
+      if (bottomNav) {
+        bottomNav.style.transform = "translateY(0)";
+        bottomNav.style.opacity = "1";
+        bottomNav.style.pointerEvents = "auto";
+      }
+    };
+  }, [showNotificationsModal, showPartySheet, showLocationSearch]);
+
+  // Load venues on filter changes
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      loadVenues();
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [loadVenues]);
+
   // Automatic slide interval for best offers carousel
   useEffect(() => {
     if (!isRegistered) return;
@@ -209,58 +310,137 @@ export default function WelcomePage() {
       setCurrentSlide((prev) => (prev + 1) % BANNERS.length);
     }, 3500);
     return () => clearInterval(interval);
-  }, [isRegistered]);
+  }, [isRegistered, BANNERS.length]);
 
-  // Typing must not fire a request per keystroke; the query key only moves once
-  // the user pauses.
+  // Fetch regions on mount
   useEffect(() => {
-    const timer = setTimeout(() => setSearchQuery(searchText.trim()), 350);
-    return () => clearTimeout(timer);
-  }, [searchText]);
+    geoService.getRegions()
+      .then((res) => setGeoRegions(res || []))
+      .catch(() => {});
 
-  // Asked for on entry, once. Everything below degrades to the national list if
-  // the answer never comes.
-  const { location, status: locationStatus, detect, choose } = useLocation({ auto: true });
+    const savedId = localStorage.getItem("selectedDistrictId");
+    const savedName = localStorage.getItem("selectedDistrictName");
+    if (savedId) {
+      setSelectedDistrictId(Number(savedId));
+    }
+    if (savedName) {
+      setSelectedDistrictName(savedName);
+    } else {
+      setSelectedDistrictName("Toshkent shahri (Barcha tumanlar)");
+      setSelectedDistrictId(null);
+    }
+  }, []);
 
-  // The other tumans of the region we landed in, for the picker below. Reference
-  // data seeded by a migration, so it is fetched once and kept.
-  const districtsQuery = useQuery({
-    queryKey: geoKeys.districts(location?.regionId ?? 0),
-    queryFn: ({ signal }) => listDistricts(location!.regionId, signal),
-    enabled: location !== null,
-    staleTime: Infinity,
-  });
-  const nearbyDistricts = districtsQuery.data ?? [];
-
-  /**
-   * What "near me" means depends on how the location was arrived at.
-   *
-   * A measured position sorts by real distance and leaves the district open —
-   * the venue two streets away in the next tuman is still the nearest one, and
-   * with five or six venues in a city a strict district filter mostly returns
-   * nothing. A district picked by hand is the opposite: it is an explicit ask
-   * for that district, so it filters.
-   */
-  const venueQuery: VenueSearchQuery = {
-    query: searchQuery || undefined,
-    venue_type: TABS.find((tab) => tab.label === activeTab)?.venueType,
-    ...(location?.latitude != null && location.longitude != null
-      ? { lat: location.latitude, lng: location.longitude, sort: "distance" }
-      : location
-        ? { district_id: location.districtId, sort: "rating" }
-        : { sort: "rating" }),
-    limit: 5,
+  const handleToggleRegion = async (regionId: number) => {
+    if (activeRegionId === regionId) {
+      setActiveRegionId(null);
+      return;
+    }
+    setActiveRegionId(regionId);
+    if (!regionDistrictsMap[regionId]) {
+      setLoadingDistrictsFor(regionId);
+      try {
+        const d = await geoService.getDistricts(regionId);
+        setRegionDistrictsMap((prev) => ({ ...prev, [regionId]: d || [] }));
+      } finally {
+        setLoadingDistrictsFor(null);
+      }
+    }
   };
 
-  const venuesQuery = useQuery({
-    queryKey: venueKeys.search(venueQuery),
-    queryFn: ({ signal }) => searchVenues(venueQuery, signal),
-    enabled: isRegistered,
-  });
+  const handleSelectDistrict = async (districtId: number | null, label: string) => {
+    setSelectedDistrictId(districtId);
+    setSelectedDistrictName(label);
+    if (districtId) {
+      localStorage.setItem("selectedDistrictId", String(districtId));
+    } else {
+      localStorage.removeItem("selectedDistrictId");
+    }
+    localStorage.setItem("selectedDistrictName", label);
+    setShowLocationSearch(false);
+    setLocationSearchInput("");
+    setToastMessage(`Manzil tanlandi: ${label}`);
 
-  const venues = venuesQuery.data?.items ?? [];
-  // The first result leads as the wide card; the rest fill the grid below it.
-  const [featured, ...rest] = venues;
+    if (isAuthenticated && districtId) {
+      await userService.saveRecentLocation({
+        district_id: districtId,
+        label,
+        latitude: 41.2995,
+        longitude: 69.2401,
+      }).catch(() => {});
+      userService.listRecentLocations().then((locs) => setRecentLocations(locs || [])).catch(() => {});
+    }
+  };
+
+  // Auto GPS Location Handler
+  const handleAutoLocation = async () => {
+    if (!navigator.geolocation) {
+      setToastMessage("Geolokatsiya qo'llab-quvvatlanmaydi");
+      return;
+    }
+
+    setGeoDetecting(true);
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        try {
+          const { latitude, longitude } = pos.coords;
+          const nearest = await geoService.getNearestDistrict(latitude, longitude);
+          const fullLabel = `${nearest.region_name}, ${nearest.district_name}`;
+          setSelectedDistrictId(nearest.district_id);
+          setSelectedDistrictName(fullLabel);
+          localStorage.setItem("selectedDistrictId", String(nearest.district_id));
+          localStorage.setItem("selectedDistrictName", fullLabel);
+          
+          if (isAuthenticated) {
+            await userService.saveRecentLocation({
+              district_id: nearest.district_id,
+              label: fullLabel,
+              latitude,
+              longitude,
+            }).catch(() => {});
+            userService.listRecentLocations().then((locs) => setRecentLocations(locs || [])).catch(() => {});
+          }
+
+          setShowLocationSearch(false);
+          setLocationSearchInput("");
+          setToastMessage(`Manzil aniqlandi: ${nearest.district_name}`);
+        } catch {
+          setToastMessage("Eng yaqin tuman topilmadi");
+        } finally {
+          setGeoDetecting(false);
+        }
+      },
+      () => {
+        setGeoDetecting(false);
+        setToastMessage("Geolokatsiyaga ruxsat berilmadi");
+      },
+      { timeout: 10000, enableHighAccuracy: true }
+    );
+  };
+
+  const handleToggleFavorite = async (e: React.MouseEvent, venueId: number) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!isAuthenticated) {
+      setToastMessage("Sevimliga qo'shish uchun tizimga kiring");
+      return;
+    }
+    try {
+      const res = await engagementService.toggleFavorite(venueId);
+      setFavoriteVenueIds((prev) => {
+        const next = new Set(prev);
+        if (res.is_favorite) {
+          next.add(venueId);
+        } else {
+          next.delete(venueId);
+        }
+        return next;
+      });
+      setToastMessage(res.is_favorite ? "Sevimliga qo'shildi ❤️" : "Sevimlilardan olib tashlandi");
+    } catch {
+      setToastMessage("Xatolik yuz berdi");
+    }
+  };
 
   if (!mounted) {
     return <div className="flex flex-col flex-1 bg-[var(--background)] animate-pulse" />;
@@ -293,7 +473,14 @@ export default function WelcomePage() {
     },
   ];
 
-  const horizontalTabs = TABS.map((tab) => tab.label);
+  const horizontalTabs: ("Umumiy" | "Restoranlar" | "To'yxonalar")[] = [
+    "Umumiy",
+    "Restoranlar",
+    "To'yxonalar",
+  ];
+
+  const displayName = user?.first_name ? `${user.first_name}` : (localStorage.getItem("fullName") || "Shahzod");
+
 
   return (
     <div className="flex flex-col flex-1 bg-[var(--background)] text-foreground transition-colors duration-300 relative">
@@ -301,42 +488,39 @@ export default function WelcomePage() {
         /* ==================== HIGH-FIDELITY REGISTERED ASOSIY (HOME) VIEW ==================== */
         <div className="flex flex-col flex-1 min-h-screen bg-white dark:bg-[var(--background)]">
           {/* Header Row */}
-          <div className={`flex items-center justify-between px-6 transition-all duration-200 ${
-            theme === "dark" 
-              ? "py-5 border-b border-brand-dark-border" 
-              : "pt-6 pb-2"
-          }`}>
-            <div className="min-w-0">
-              <h1 className={`text-xl font-extrabold tracking-tight ${
-                theme === "dark" ? "text-white" : "text-zinc-900"
-              }`}>
-                Hayrli kun! {fullName}
-              </h1>
-
-              {/* Where the venues below are being counted from. Tapping it opens
-                  the picker, which is the only way out when the phone refuses. */}
-              <button
-                type="button"
-                // Always the picker, never a bare retry: after a refusal the
-                // browser denies again without showing anything, so a chip that
-                // re-detected would look like a dead button.
-                onClick={() => setShowLocationSearch(true)}
-                className={`mt-0.5 flex items-center gap-1 text-xs font-bold transition-opacity active:opacity-60 ${
-                  theme === "dark" ? "text-white/60" : "text-zinc-500"
+          <div
+            className={`flex items-center justify-between px-6 transition-all duration-200 ${
+              theme === "dark" ? "py-5 border-b border-brand-dark-border" : "pt-6 pb-2"
+            }`}
+          >
+            <div>
+              <h1
+                className={`text-xl font-extrabold tracking-tight ${
+                  theme === "dark" ? "text-white" : "text-zinc-900"
                 }`}
               >
-                <MapPin className="h-3.5 w-3.5 shrink-0 text-[#FF6B00]" />
-                <span className="truncate">
-                  {location
-                    ? `${location.districtName}, ${location.regionName}`
-                    : locationStatus === "locating"
-                      ? "Manzil aniqlanmoqda..."
-                      : "Manzilni aniqlash"}
-                </span>
-              </button>
+                Hayrli kun! {displayName}
+              </h1>
             </div>
 
             <div className="flex items-center gap-2">
+              {/* Notifications Button */}
+              <button
+                type="button"
+                onClick={() => setShowNotificationsModal(true)}
+                className={`p-2.5 rounded-2xl border transition-all active:scale-95 flex items-center justify-center cursor-pointer shadow-sm relative ${
+                  theme === "dark"
+                    ? "bg-[#393939] border-white/5 text-white/80 hover:text-white"
+                    : "bg-white border-zinc-200 text-zinc-800 hover:text-primary"
+                }`}
+                aria-label="Notifications"
+              >
+                <Bell className="h-5 w-5" />
+                {unreadCount > 0 && (
+                  <span className="absolute top-1.5 right-1.5 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-[var(--background)] animate-pulse" />
+                )}
+              </button>
+
               {/* Theme Toggle Button */}
               <button
                 type="button"
@@ -351,65 +535,126 @@ export default function WelcomePage() {
                 {theme === "dark" ? <Sun className="h-5 w-5 text-orange-400" /> : <Moon className="h-5 w-5 text-zinc-600" />}
               </button>
 
-              {theme === "dark" ? (
-                /* Original Voucher button for dark mode */
-                <Link
-                  href="/tickets"
-                  className="p-2.5 rounded-xl bg-[#393939] border border-white/5 text-white/80 hover:text-white transition-all active:scale-95 flex items-center justify-center"
-                >
-                  <Ticket className="h-5 w-5" />
-                </Link>
-              ) : (
-                /* Bookmark button for light mode */
-                <button
-                  type="button"
-                  className="p-2.5 rounded-2xl bg-white border border-zinc-200 text-zinc-800 hover:text-primary transition-all active:scale-95 flex items-center justify-center cursor-pointer shadow-sm"
-                  aria-label="Bookmarks"
-                >
-                  <Bookmark className="h-5 w-5" />
-                </button>
-              )}
+              {/* Vouchers Link */}
+              <Link
+                href="/tickets"
+                className={`p-2.5 rounded-2xl border transition-all active:scale-95 flex items-center justify-center shadow-sm ${
+                  theme === "dark"
+                    ? "bg-[#393939] border-white/5 text-white/80 hover:text-white"
+                    : "bg-white border-zinc-200 text-zinc-800 hover:text-primary"
+                }`}
+                aria-label="Vouchers"
+              >
+                <Ticket className="h-5 w-5" />
+              </Link>
             </div>
           </div>
 
           {/* Main Scrollable Area */}
-          <main className={`flex-1 overflow-y-auto px-6 pb-8 flex flex-col gap-6 max-w-md mx-auto w-full text-left ${theme === "dark" ? "py-6" : "py-4"}`}>
-            
+          <main
+            className={`flex-1 overflow-y-auto px-6 pb-8 flex flex-col gap-6 max-w-md mx-auto w-full text-left ${
+              theme === "dark" ? "py-6" : "py-4"
+            }`}
+          >
             {/* Search Input and Filter Button */}
             <div className="flex items-center gap-3">
               {/* Search Field */}
-              <div className={`flex-1 relative flex items-center rounded-2xl overflow-hidden transition-all duration-300 ${
-                theme === "dark" 
-                  ? "bg-[#393939] border border-white/5 focus-within:border-primary/50" 
-                  : "bg-zinc-100 border border-transparent focus-within:ring-2 focus-within:ring-primary/20"
-              }`}>
-                <span className={`pl-4 ${theme === "dark" ? "text-white/40" : "text-zinc-400"}`}>
-                  <Search className="h-5 w-5" />
+              <div
+                className={`flex-1 h-[52px] relative flex items-center rounded-full overflow-hidden transition-all duration-300 ${
+                  theme === "dark"
+                    ? "bg-[#252525] border border-white/5 focus-within:border-[#EA530E]/50"
+                    : "bg-[#F2F4F7] border border-transparent focus-within:ring-2 focus-within:ring-[#EA530E]/20"
+                }`}
+              >
+                <span className="pl-4 text-[#EA530E] flex items-center justify-center">
+                  <Search className="w-5 h-5 stroke-[2.2]" />
                 </span>
                 <input
                   type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
                   placeholder="Qidirish"
-                  value={searchText}
-                  onChange={(e) => setSearchText(e.target.value)}
-                  className={`w-full pl-3 pr-4 py-3.5 bg-transparent text-sm font-medium outline-none ${
+                  className={`w-full pl-3 pr-4 h-full bg-transparent text-[15px] sm:text-base font-normal outline-none ${
                     theme === "dark"
-                      ? "text-white placeholder:text-white/30"
-                      : "text-zinc-800 placeholder:text-zinc-400"
+                      ? "text-white placeholder:text-zinc-500"
+                      : "text-zinc-900 placeholder:text-[#717680]"
                   }`}
                 />
+                {searchQuery && (
+                  <button
+                    onClick={() => setSearchQuery("")}
+                    className="pr-4 text-xs font-bold text-zinc-400 hover:text-zinc-600 cursor-pointer"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                )}
               </div>
 
               {/* Orange Slider/Filter Button */}
               <button
                 type="button"
                 onClick={() => setShowPartySheet(true)}
-                className={`bg-[#FF6B00] hover:bg-[#E05000] text-white rounded-2xl shadow-lg shadow-[#FF6B00]/20 transition-all active:scale-95 flex items-center justify-center cursor-pointer ${
-                  theme === "dark" ? "p-4" : "p-3.5"
+                className={`w-[52px] h-[52px] rounded-[18px] bg-[#EA530E] hover:bg-[#D44607] text-white shadow-sm shadow-[#EA530E]/20 transition-all active:scale-95 flex items-center justify-center cursor-pointer shrink-0 ${
+                  guestCountFilter ? "ring-2 ring-white ring-offset-1" : ""
                 }`}
+                aria-label="Filter"
               >
-                <SlidersHorizontal className="h-5 w-5" />
+                <svg
+                  className="w-6 h-6"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                >
+                  <line x1="4.5" y1="8.5" x2="19.5" y2="8.5" stroke="white" strokeWidth="2.4" strokeLinecap="round" />
+                  <circle cx="9.5" cy="8.5" r="3.2" fill="white" />
+                  <line x1="4.5" y1="15.5" x2="19.5" y2="15.5" stroke="white" strokeWidth="2.4" strokeLinecap="round" />
+                  <circle cx="14.5" cy="15.5" r="3.2" fill="white" />
+                </svg>
               </button>
             </div>
+
+            {/* Active Filter Chips */}
+            {(guestCountFilter || (selectedDistrictId !== null && selectedDistrictName) || searchQuery) && (
+              <div className="flex flex-wrap items-center gap-2 pt-0.5 animate-fade-in">
+                {selectedDistrictId !== null && (
+                  <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#FF6B00]/10 border border-[#FF6B00]/20 text-[#FF6B00] text-xs font-bold">
+                    <MapPin className="h-3 w-3" />
+                    <span className="truncate max-w-[140px]">{selectedDistrictName.split(", ").pop() || "Tuman"}</span>
+                    <button
+                      type="button"
+                      onClick={() => handleSelectDistrict(null, "Toshkent shahri (Barcha tumanlar)")}
+                      className="hover:opacity-70 p-0.5 cursor-pointer"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                )}
+                {guestCountFilter && (
+                  <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#FF6B00]/10 border border-[#FF6B00]/20 text-[#FF6B00] text-xs font-bold">
+                    <span>{guestCountFilter} kishi</span>
+                    <button
+                      type="button"
+                      onClick={() => setGuestCountFilter(null)}
+                      className="hover:opacity-70 p-0.5 cursor-pointer"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                )}
+                {searchQuery && (
+                  <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#FF6B00]/10 border border-[#FF6B00]/20 text-[#FF6B00] text-xs font-bold">
+                    <span>"{searchQuery}"</span>
+                    <button
+                      type="button"
+                      onClick={() => setSearchQuery("")}
+                      className="hover:opacity-70 p-0.5 cursor-pointer"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
 
             {/* Horizontal Tabs / Pills */}
             <div className="flex w-full gap-2.5 pb-1 overflow-x-auto scrollbar-none">
@@ -422,12 +667,12 @@ export default function WelcomePage() {
                     onClick={() => setActiveTab(tab)}
                     className={`flex-1 text-center py-2.5 px-5 rounded-full text-sm font-bold whitespace-nowrap transition-all duration-200 border ${
                       isActive
-                        ? (theme === "dark" 
-                            ? "bg-primary text-white border-primary shadow-lg shadow-primary/10" 
-                            : "bg-primary text-white border-primary shadow-md")
-                        : (theme === "dark" 
-                            ? "bg-[#393939] border-white/5 text-white/60 hover:text-white" 
-                            : "bg-white border-zinc-200 text-zinc-800 hover:text-zinc-900")
+                        ? theme === "dark"
+                          ? "bg-primary text-white border-primary shadow-lg shadow-primary/10"
+                          : "bg-primary text-white border-primary shadow-md"
+                        : theme === "dark"
+                        ? "bg-[#393939] border-white/5 text-white/60 hover:text-white"
+                        : "bg-white border-zinc-200 text-zinc-800 hover:text-zinc-900"
                     }`}
                   >
                     {tab}
@@ -439,9 +684,15 @@ export default function WelcomePage() {
             {/* Section: Eng yaxshi takliflar */}
             <div className="space-y-4">
               <div className="flex justify-between items-center pr-1">
-                <h2 className={`text-base font-extrabold tracking-tight ${theme === "dark" ? "text-white" : "text-zinc-900"}`}>Eng yaxshi takliflar</h2>
-                <Link 
-                  href="/tickets" 
+                <h2
+                  className={`text-base font-extrabold tracking-tight ${
+                    theme === "dark" ? "text-white" : "text-zinc-900"
+                  }`}
+                >
+                  Eng yaxshi takliflar
+                </h2>
+                <Link
+                  href="/tickets"
                   className={`text-xs font-bold hover:underline transition-colors ${
                     theme === "dark" ? "text-white/40" : "text-[#FF6B00]"
                   }`}
@@ -452,10 +703,19 @@ export default function WelcomePage() {
 
               {/* Banner Card Carousel */}
               <div className="relative group">
-                <div className={`w-full aspect-[2.1/1] rounded-[28px] overflow-hidden border shadow-lg relative ${
-                  theme === "dark" ? "bg-[#393939] border-white/5" : "bg-white border-zinc-100"
-                }`}>
-                  {BANNERS.map((banner, index) => {
+                <div
+                  className={`w-full aspect-[2.1/1] rounded-[28px] overflow-hidden border shadow-lg relative ${
+                    theme === "dark" ? "bg-[#393939] border-white/5" : "bg-white border-zinc-100"
+                  }`}
+                >
+                  {(activeTab === "To'yxonalar"
+                    ? [
+                        "/images/home/tuyxona2.png",
+                        "/images/home/tuyxona3.png",
+                        "/images/home/tuyxona1.png",
+                      ]
+                    : BANNERS
+                  ).map((banner, index) => {
                     const isActive = currentSlide === index;
                     return (
                       <img
@@ -469,10 +729,13 @@ export default function WelcomePage() {
                     );
                   })}
                 </div>
-                
+
                 {/* Indicator Dots */}
                 <div className="flex justify-center items-center gap-1.5 pt-3">
-                  {BANNERS.map((_, index) => {
+                  {(activeTab === "To'yxonalar"
+                    ? ["/images/home/tuyxona2.png", "/images/home/tuyxona3.png", "/images/home/tuyxona1.png"]
+                    : BANNERS
+                  ).map((_, index) => {
                     const isActive = currentSlide === index;
                     return (
                       <button
@@ -480,11 +743,11 @@ export default function WelcomePage() {
                         type="button"
                         onClick={() => setCurrentSlide(index)}
                         className={`h-1.5 rounded-full transition-all duration-300 cursor-pointer ${
-                          isActive 
-                            ? "w-4 bg-primary" 
-                            : (theme === "dark" 
-                                ? "w-1.5 bg-white/20 hover:bg-white/40" 
-                                : "w-1.5 bg-zinc-300 hover:bg-zinc-400")
+                          isActive
+                            ? "w-4 bg-primary"
+                            : theme === "dark"
+                            ? "w-1.5 bg-white/20 hover:bg-white/40"
+                            : "w-1.5 bg-zinc-300 hover:bg-zinc-400"
                         }`}
                       />
                     );
@@ -493,12 +756,19 @@ export default function WelcomePage() {
               </div>
             </div>
 
-            {/* Section: Top Restoranlar */}
+            {/* Section: Top Restoranlar & Zallar / Top to'yxonalar */}
             <div className="space-y-4">
               <div className="flex justify-between items-center pr-1">
-                <h2 className={`text-base font-extrabold tracking-tight ${theme === "dark" ? "text-white" : "text-zinc-900"}`}>Top Restoranlar</h2>
-                <Link 
-                  href="/feed" 
+                <h2
+                  className={`text-base font-extrabold tracking-tight flex items-center gap-2 ${
+                    theme === "dark" ? "text-white" : "text-zinc-900"
+                  }`}
+                >
+                  <span>{activeTab === "To'yxonalar" ? "Top to'yxonalar" : "Top Restoranlar & Zallar"}</span>
+                  {loadingVenues && <Loader2 className="h-4 w-4 animate-spin text-primary" />}
+                </h2>
+                <Link
+                  href="/feed"
                   className={`text-xs font-bold hover:underline transition-colors ${
                     theme === "dark" ? "text-white/40" : "text-[#FF6B00]"
                   }`}
@@ -507,350 +777,710 @@ export default function WelcomePage() {
                 </Link>
               </div>
 
-              {venuesQuery.isPending && (
-                <div className={`w-full h-72 rounded-3xl animate-pulse ${
-                  theme === "dark" ? "bg-[#393939]" : "bg-zinc-100"
-                }`} />
-              )}
+              {/* Venues Content */}
+              {(() => {
+                const displayedVenues = venues;
 
-              {venuesQuery.isError && (
-                <div className={`w-full rounded-3xl border p-6 text-center text-xs font-bold ${
-                  theme === "dark" ? "bg-[#393939] border-white/5 text-white/60" : "bg-white border-zinc-100 text-zinc-500"
-                }`}>
-                  Muassasalarni yuklab bo'lmadi
-                </div>
-              )}
-
-              {!venuesQuery.isPending && !venuesQuery.isError && !featured && (
-                <div className={`w-full rounded-3xl border p-6 text-center text-xs font-bold ${
-                  theme === "dark" ? "bg-[#393939] border-white/5 text-white/60" : "bg-white border-zinc-100 text-zinc-500"
-                }`}>
-                  Hech narsa topilmadi
-                </div>
-              )}
-
-              {/* Large Full-Width Restaurant Card */}
-              {featured && (
-                <Link
-                  href={`/venue/${featured.id}`}
-                  className={`w-full border rounded-3xl flex flex-col gap-4 shadow-lg transition-all block text-left ${
-                    theme === "dark"
-                      ? "bg-[#393939] border-white/5 p-5 hover:border-white/10"
-                      : "bg-white border-zinc-100 p-4 hover:border-zinc-200"
-                  }`}
-                >
-                  {/* Visual Image Display */}
-                  <div className={`w-full h-44 rounded-2xl overflow-hidden relative border ${
-                    theme === "dark" ? "border-white/5" : "border-zinc-100"
-                  }`}>
-                    <img
-                      src={PLACEHOLDER_IMAGES[0]}
-                      alt={featured.name}
-                      className="w-full h-full object-cover"
-                    />
-                  </div>
-
-                  {/* Restaurant details */}
-                  <div className="space-y-3">
-                    <div className="flex items-start justify-between">
-                      <div>
-                        <h3 className={`text-base font-extrabold tracking-tight ${theme === "dark" ? "text-white" : "text-zinc-900"}`}>{featured.name}</h3>
-                        <div className={`flex items-center gap-1 text-xs font-bold pt-1 ${
-                          featured.is_open_now ? "text-green-600" : "text-zinc-400"
-                        }`}>
-                          <span className={`w-1.5 h-1.5 rounded-full ${featured.is_open_now ? "bg-green-500" : "bg-zinc-400"}`} />
-                          <span>{featured.is_open_now ? "Ochiq" : "Yopiq"}</span>
-                        </div>
-                      </div>
-
-                      {/* Star Rating */}
-                      <div className={`flex items-center gap-1 text-xs font-bold text-[#FFB800] border px-2.5 py-1 rounded-xl ${
-                        theme === "dark" ? "bg-white/5 border-white/5" : "bg-yellow-500/5 border-yellow-500/10"
-                      }`}>
-                        <Star className="h-3.5 w-3.5 fill-[#FFB800] text-[#FFB800]" />
-                        <span>{formatRating(featured.rating_avg)} ({featured.reviews_count} ta sharh)</span>
+                if (loadingVenues) {
+                  return (
+                    /* Skeleton Loader */
+                    <div className="space-y-4 animate-pulse">
+                      <div className={`w-full h-72 rounded-3xl border ${theme === "dark" ? "bg-[#393939]/60 border-white/5" : "bg-zinc-100 border-zinc-200"}`} />
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className={`h-56 rounded-3xl border ${theme === "dark" ? "bg-[#393939]/60 border-white/5" : "bg-zinc-100 border-zinc-200"}`} />
+                        <div className={`h-56 rounded-3xl border ${theme === "dark" ? "bg-[#393939]/60 border-white/5" : "bg-zinc-100 border-zinc-200"}`} />
                       </div>
                     </div>
+                  );
+                }
 
-                    {/* Metadata Row */}
-                    <div className="flex justify-between items-center">
-                      <div className={`flex items-center gap-1.5 text-xs font-bold ${theme === "dark" ? "text-white/60" : "text-zinc-500"}`}>
-                        <Compass className="h-4 w-4 text-zinc-400 dark:text-white/40" />
-                        <span>{formatDistance(featured.distance_m) ?? "Masofa noma'lum"}</span>
+                if (displayedVenues.length === 0) {
+                  return (
+                    /* Empty State */
+                    <div className={`py-12 px-6 text-center space-y-3 rounded-3xl border border-dashed ${
+                      theme === "dark" ? "border-white/10 bg-white/[0.02]" : "border-zinc-200 bg-zinc-50"
+                    }`}>
+                      <div className="w-12 h-12 rounded-2xl bg-[#FF6B00]/10 flex items-center justify-center text-[#FF6B00] mx-auto">
+                        <Search className="h-6 w-6" />
                       </div>
-
-                      {/* Deposit green badge */}
-                      {featured.requires_deposit && (
-                        <div className={`flex items-center gap-1 font-bold rounded-lg px-2.5 py-1 text-[10px] uppercase tracking-wider transition-colors ${
-                          theme === "dark"
-                            ? "bg-green-500/10 border border-green-500/20 text-[#10B981]"
-                            : "bg-[#10B981] text-white shadow-sm"
-                        }`}>
-                          <Wallet className="h-3.5 w-3.5 shrink-0" />
-                          <span>Depozitlik</span>
-                        </div>
+                      <h3 className="text-sm font-bold text-foreground dark:text-white">
+                        Mos keluvchi muassasa topilmadi
+                      </h3>
+                      <p className="text-xs text-zinc-400 max-w-xs mx-auto leading-relaxed">
+                        {selectedDistrictId !== null
+                          ? "Tanlangan tumanda hali muassasalar mavjud emas. Barcha tumanlar bo'yicha ko'rishni xohlaysizmi?"
+                          : searchQuery
+                          ? `"${searchQuery}" so'rovi bo'yicha hech qanday natija topilmadi.`
+                          : "Ushbu toifada hozircha muassasalar mavjud emas."}
+                      </p>
+                      {(selectedDistrictId !== null || searchQuery || guestCountFilter) && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setActiveTab("Umumiy");
+                            setSelectedDistrictId(null);
+                            setSelectedDistrictName("Toshkent shahri (Barcha tumanlar)");
+                            setSearchQuery("");
+                            setGuestCountFilter(null);
+                          }}
+                          className="px-4 py-2.5 rounded-xl bg-[#FF6B00] hover:bg-[#E05000] text-white text-xs font-bold shadow-md shadow-[#FF6B00]/20 transition-all cursor-pointer"
+                        >
+                          Barcha muassasalarni ko'rish
+                        </button>
                       )}
                     </div>
+                  );
+                }
 
-                    {/* Tagline — the list response carries no street address */}
-                    {featured.tagline && (
-                      <div className={`flex items-center gap-1.5 text-xs font-semibold truncate pt-0.5 ${
-                        theme === "dark" ? "text-white/50" : "text-zinc-500"
-                      }`}>
-                        <MapPin className="h-4 w-4 text-zinc-400 dark:text-white/30 shrink-0" />
-                        <span className="truncate">{featured.tagline}</span>
+                return (
+                  <div className="space-y-4">
+                    {/* Large Featured Card (First Venue) */}
+                    {(() => {
+                      const isToyxona = activeTab === "To'yxonalar";
+                      const topVenue = displayedVenues[0] || {
+                        id: 1,
+                        name: "Bahor Chilonzor",
+                        rating_avg: "4.8",
+                        reviews_count: 356,
+                        status: "active",
+                        distance_m: 1000,
+                      };
+                      const bannerImg = "/images/home/top.png";
+                      const venueTitle = isToyxona ? "The Royal Grand" : topVenue.name;
+
+                      const toyxonaData: ToyxonaVenueData = {
+                        id: topVenue.id || 99,
+                        name: venueTitle,
+                        price: "25,000,000 so'm",
+                        capacity: "500 - 1,200 gacha odam",
+                        img: bannerImg,
+                        rating: "4.8",
+                        reviewsCount: "356 ta sharh",
+                        distance: "1 km uzoqda",
+                        address: "Navoiy, O‘zbekiston ko‘chasi 27 - uy",
+                        discount: "10% chegirma",
+                        description:
+                          "Hasidona Koshona - bu sizning unutilmas tadbirlaringiz uchun mo'ljallangan hashamatli majmua. Modern klassika uslubidagi dizayn, keng va yorug' zal hamda professional xizmat ko'rsatish jamoasi sizning to'y, korporativ tadbir yoki yubileyingizni yuqori saviyada o'tkazishni ta'minlaydi.",
+                      };
+
+                      if (isToyxona) {
+                        return (
+                          <Link
+                            key={topVenue.id || 99}
+                            href={`/toyxona/${topVenue.id || 99}`}
+                            className={`w-full border rounded-[28px] p-4 flex flex-col gap-3.5 shadow-[0_4px_20px_rgba(0,0,0,0.04)] transition-all block text-left group cursor-pointer ${
+                              theme === "dark"
+                                ? "bg-[#252525] border-white/5 hover:border-white/10"
+                                : "bg-white border-zinc-100 hover:border-zinc-200"
+                            }`}
+                          >
+                            {/* Visual Image Display */}
+                            <div className="w-full h-52 sm:h-56 rounded-2xl overflow-hidden relative">
+                              <img
+                                src={bannerImg}
+                                alt={venueTitle}
+                                className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                              />
+                              <div className="absolute top-3 left-3 inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#16A34A] text-white text-xs font-bold shadow-md">
+                                <span className="w-3.5 h-3.5 rounded border border-white flex items-center justify-center text-[9px] font-black">
+                                  %
+                                </span>
+                                <span>10% chegirma</span>
+                              </div>
+                            </div>
+
+                            {/* To'yxona Details */}
+                            <div className="space-y-2.5">
+                              {/* Row 1: Title & Rating */}
+                              <div className="flex items-center justify-between gap-2">
+                                <h3
+                                  className={`text-[18px] font-bold tracking-tight truncate ${
+                                    theme === "dark" ? "text-white" : "text-zinc-900"
+                                  }`}
+                                >
+                                  {venueTitle}
+                                </h3>
+
+                                <div className="flex items-center gap-1.5 text-sm shrink-0">
+                                  <Star className="h-4 w-4 fill-[#F59E0B] text-[#F59E0B]" />
+                                  <span className={`font-semibold ${theme === "dark" ? "text-white" : "text-zinc-900"}`}>
+                                    4.8
+                                  </span>
+                                  <span className={theme === "dark" ? "text-zinc-400" : "text-zinc-500"}>
+                                    (356 ta sharh)
+                                  </span>
+                                </div>
+                              </div>
+
+                              {/* Row 2: Status & Capacity */}
+                              <div className="flex items-center justify-between text-sm">
+                                <div className="flex items-center gap-1.5 font-semibold text-[#16A34A] dark:text-[#22C55E]">
+                                  <span className="w-2 h-2 rounded-full bg-[#16A34A] dark:bg-[#22C55E]" />
+                                  <span>Ochiq</span>
+                                </div>
+                                <div className="flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400 font-medium">
+                                  <Users className="w-3.5 h-3.5 text-[#FF6B00]" />
+                                  <span>500 - 1,200 gacha odam</span>
+                                </div>
+                              </div>
+
+                              {/* Row 3: Distance & Deposit */}
+                              <div className="flex items-center gap-2.5 flex-wrap">
+                                <div
+                                  className={`flex items-center gap-1.5 text-sm font-normal ${
+                                    theme === "dark" ? "text-zinc-300" : "text-zinc-600"
+                                  }`}
+                                >
+                                  <Map className="h-4 w-4 text-zinc-500 dark:text-zinc-400 shrink-0" />
+                                  <span>1 km uzoqda</span>
+                                </div>
+
+                                <span className="text-zinc-300 dark:text-zinc-600 select-none">|</span>
+
+                                <div className="inline-flex items-center gap-1.5 bg-[#22C55E] text-white px-2.5 py-0.5 rounded-full text-xs font-semibold shadow-xs">
+                                  <div className="w-3.5 h-3.5 rounded-[4px] border-[1.2px] border-white flex items-center justify-center text-[9px] font-bold leading-none shrink-0">
+                                    %
+                                  </div>
+                                  <span>Depozitlik</span>
+                                </div>
+                              </div>
+
+                              {/* Row 4: Address */}
+                              <div
+                                className={`flex items-center gap-1.5 text-sm font-normal truncate ${
+                                  theme === "dark" ? "text-zinc-400" : "text-zinc-500"
+                                }`}
+                              >
+                                <MapPin className="h-4 w-4 text-zinc-400 dark:text-zinc-500 shrink-0" />
+                                <span className="truncate">Navoiy, O‘zbekiston ko‘chasi 27 - uy</span>
+                              </div>
+
+                              {/* Row 5: Price & Band Qilish Action */}
+                              <div className="pt-2 border-t border-zinc-100 dark:border-white/5 flex items-center justify-between gap-3">
+                                <div>
+                                  <span className="text-[11px] text-zinc-400 block font-medium">Zal narxi:</span>
+                                  <span className="text-base font-extrabold text-[#FF6B00]">25,000,000 so‘m</span>
+                                </div>
+                                <div
+                                  className="py-2.5 px-5 rounded-full bg-[#FF6B00] hover:bg-[#E05000] text-white font-bold text-xs flex items-center justify-center gap-1.5 active:scale-95 transition-all shadow-md shadow-[#FF6B00]/25"
+                                >
+                                  <span>Band qilish</span>
+                                  <ChevronRight className="w-3.5 h-3.5 stroke-[3]" />
+                                </div>
+                              </div>
+                            </div>
+                          </Link>
+                        );
+                      }
+
+                      return (
+                        <Link
+                          href={`/venue/${topVenue.id}`}
+                          className={`w-full border rounded-[28px] p-4 flex flex-col gap-3.5 shadow-[0_4px_20px_rgba(0,0,0,0.04)] transition-all block text-left group ${
+                            theme === "dark"
+                              ? "bg-[#252525] border-white/5 hover:border-white/10"
+                              : "bg-white border-zinc-100 hover:border-zinc-200"
+                          }`}
+                        >
+                          {/* Visual Image Display */}
+                          <div className="w-full h-48 sm:h-52 rounded-2xl overflow-hidden relative">
+                            <img
+                              src={bannerImg}
+                              alt={topVenue.name}
+                              className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                            />
+                          </div>
+
+                          {/* Restaurant details */}
+                          <div className="space-y-2">
+                            {/* Row 1: Title & Rating */}
+                            <div className="flex items-center justify-between gap-2">
+                              <h3
+                                className={`text-[17px] sm:text-lg font-bold tracking-tight truncate ${
+                                  theme === "dark" ? "text-white" : "text-zinc-900"
+                                }`}
+                              >
+                                {topVenue.name}
+                              </h3>
+
+                              {/* Star Rating & Review count */}
+                              <div className="flex items-center gap-1.5 text-sm shrink-0">
+                                <Star className="h-4 w-4 fill-[#F59E0B] text-[#F59E0B]" />
+                                <span
+                                  className={`font-semibold ${
+                                    theme === "dark" ? "text-white" : "text-zinc-900"
+                                  }`}
+                                >
+                                  {topVenue.rating_avg && Number(topVenue.rating_avg) > 0
+                                    ? Number(topVenue.rating_avg).toFixed(1)
+                                    : "4.8"}
+                                </span>
+                                <span
+                                  className={`${
+                                    theme === "dark" ? "text-zinc-400" : "text-zinc-500"
+                                  }`}
+                                >
+                                  ({topVenue.reviews_count && topVenue.reviews_count > 0
+                                    ? `${topVenue.reviews_count} ta sharh`
+                                    : "356 ta sharh"})
+                                </span>
+                              </div>
+                            </div>
+
+                            {/* Row 2: Status */}
+                            <div className="flex items-center gap-1.5 text-sm font-semibold text-[#16A34A] dark:text-[#22C55E]">
+                              <span className="w-2 h-2 rounded-full bg-[#16A34A] dark:bg-[#22C55E]" />
+                              <span>
+                                {topVenue.status === "closed"
+                                  ? "Yopiq"
+                                  : "Ochiq"}
+                              </span>
+                            </div>
+
+                            {/* Row 3: Distance & Deposit */}
+                            <div className="flex items-center gap-2.5 flex-wrap">
+                              <div
+                                className={`flex items-center gap-1.5 text-sm font-normal ${
+                                  theme === "dark" ? "text-zinc-300" : "text-zinc-600"
+                                }`}
+                              >
+                                <Map className="h-4 w-4 text-zinc-500 dark:text-zinc-400 shrink-0" />
+                                <span>
+                                  {topVenue.distance_m
+                                    ? `${(topVenue.distance_m / 1000).toFixed(0)} km uzoqda`
+                                    : "1 km uzoqda"}
+                                </span>
+                              </div>
+
+                              <span className="text-zinc-300 dark:text-zinc-600 select-none">|</span>
+
+                              <div className="inline-flex items-center gap-1.5 bg-[#22C55E] text-white px-2.5 py-0.5 rounded-full text-xs font-semibold shadow-xs">
+                                <div className="w-3.5 h-3.5 rounded-[4px] border-[1.2px] border-white flex items-center justify-center text-[9px] font-bold leading-none shrink-0">
+                                  %
+                                </div>
+                                <span>Depozitlik</span>
+                              </div>
+                            </div>
+
+                            {/* Row 4: Address */}
+                            <div
+                              className={`flex items-center gap-1.5 text-sm font-normal truncate ${
+                                theme === "dark" ? "text-zinc-400" : "text-zinc-500"
+                              }`}
+                            >
+                              <MapPin className="h-4 w-4 text-zinc-400 dark:text-zinc-500 shrink-0" />
+                              <span className="truncate">
+                                {(topVenue as any).street
+                                  ? `${(topVenue as any).street}${(topVenue as any).house_number ? ' ' + (topVenue as any).house_number + ' - uy' : ''}`
+                                  : "O‘zbekiston ko‘chasi 27 - uy"}
+                              </span>
+                            </div>
+                          </div>
+                        </Link>
+                      );
+                    })()}
+
+                    {/* 2x2 Grid for Other Venues */}
+                    {displayedVenues.length > 1 && (
+                      <div className="grid grid-cols-2 gap-4">
+                        {(() => {
+                          const isToyxona = activeTab === "To'yxonalar";
+
+                          const FIGMA_CARDS = isToyxona
+                            ? [
+                                {
+                                  name: "Yakkasaroy To'yxonasi",
+                                  img: "/images/home/tuyxona1.png",
+                                  capacity: "300 - 800 kishi",
+                                  price: "20,000,000 so'm",
+                                },
+                                {
+                                  name: "Mumtoz Saroyi",
+                                  img: "/images/home/tuyxona2.png",
+                                  capacity: "400 - 1000 kishi",
+                                  price: "22,000,000 so'm",
+                                },
+                                {
+                                  name: "Osiyo Grand",
+                                  img: "/images/home/tuyxona3.png",
+                                  capacity: "250 - 600 kishi",
+                                  price: "18,000,000 so'm",
+                                },
+                                {
+                                  name: "Versal To'yxonasi",
+                                  img: "/images/home/tuyxona4.png",
+                                  capacity: "500 - 1200 kishi",
+                                  price: "28,000,000 so'm",
+                                },
+                              ]
+                            : [
+                                { name: "Sayqal", img: "/images/home/tuyxona1.png" },
+                                { name: "Tinchlik", img: "/images/home/tuyxona2.png" },
+                                { name: "Panorama", img: "/images/home/tuyxona3.png" },
+                                { name: "Sharqona", img: "/images/home/tuyxona4.png" },
+                              ];
+
+                          return displayedVenues.slice(1, 5).map((card, idx) => {
+                            const figmaItem = FIGMA_CARDS[idx % FIGMA_CARDS.length];
+                            const cardTitle = searchQuery ? card.name : (figmaItem?.name || card.name);
+                            const cardImg = card.cover_url || figmaItem?.img || FALLBACK_IMAGES[(idx + 1) % FALLBACK_IMAGES.length];
+
+                            const toyxonaCardData: ToyxonaVenueData = {
+                              id: card.id,
+                              name: cardTitle,
+                              price: (figmaItem as any)?.price || "20,000,000 so'm",
+                              capacity: (figmaItem as any)?.capacity || "300 - 800 kishi",
+                                  img: cardImg,
+                                  rating: "4.8",
+                                  reviewsCount: "356 ta sharh",
+                                  distance: "2 km uzoqda",
+                                  address: "Umid qo‘rg‘oni",
+                                  discount: "10% chegirma",
+                                };
+
+                                if (isToyxona) {
+                                  return (
+                                    <Link
+                                      key={card.id}
+                                      href={`/toyxona/${card.id}`}
+                                      className={`border rounded-[24px] p-3 flex flex-col gap-2.5 shadow-[0_4px_20px_rgba(0,0,0,0.04)] text-left relative group transition-all cursor-pointer ${
+                                        theme === "dark" ? "bg-[#252525] border-white/5 shadow-lg" : "bg-white border-zinc-100"
+                                      }`}
+                                    >
+                                      {/* Image Viewport */}
+                                      <div className="w-full aspect-square rounded-[18px] overflow-hidden relative">
+                                        <img
+                                          src={cardImg}
+                                          alt={cardTitle}
+                                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                                        />
+                                      </div>
+
+                                      {/* Info details */}
+                                      <div className="space-y-1.5 pr-0.5">
+                                        {/* Row 1: Title & Rating */}
+                                        <div className="flex items-center justify-between gap-1">
+                                          <h4
+                                            className={`text-sm sm:text-[15px] font-bold tracking-tight truncate ${
+                                              theme === "dark" ? "text-white" : "text-zinc-900"
+                                            }`}
+                                          >
+                                            {cardTitle}
+                                          </h4>
+                                          <div className="flex items-center gap-1 text-xs sm:text-sm font-bold shrink-0">
+                                            <Star className="h-3.5 w-3.5 fill-[#F59E0B] text-[#F59E0B]" />
+                                            <span className={theme === "dark" ? "text-white" : "text-zinc-900"}>
+                                              4.8
+                                            </span>
+                                          </div>
+                                        </div>
+
+                                        {/* Row 2: Status */}
+                                        <div className="flex items-center gap-1.5 text-xs font-semibold text-[#16A34A] dark:text-[#22C55E]">
+                                          <span className="w-1.5 h-1.5 rounded-full bg-[#16A34A] dark:bg-[#22C55E]" />
+                                          <span>Ochiq</span>
+                                        </div>
+
+                                        {/* Row 3: Distance & Deposit */}
+                                        <div className="flex items-center justify-between text-xs text-zinc-500 dark:text-zinc-400 font-medium">
+                                          <div className="flex items-center gap-1 truncate">
+                                            <Map className="h-3 w-3 shrink-0" />
+                                            <span>2 km</span>
+                                          </div>
+                                          <span className="font-bold text-xs text-zinc-900 dark:text-white shrink-0 ml-1">
+                                            {(figmaItem as any)?.price || "20M so‘m"}
+                                          </span>
+                                        </div>
+
+                                        {/* Row 4: Action Button */}
+                                        <div
+                                          className="w-full py-2 text-xs font-bold rounded-full flex items-center justify-center gap-1.5 bg-[#FF6B00] hover:bg-[#E05000] text-white active:scale-95 transition-all shadow-sm shadow-[#FF6B00]/20 mt-1"
+                                        >
+                                          <span>Band qilish</span>
+                                          <ArrowRight className="h-3.5 w-3.5 stroke-[2.5] text-white" />
+                                        </div>
+                                      </div>
+                                    </Link>
+                                  );
+                                }
+
+                                return (
+                                  <div
+                                    key={card.id}
+                                    className={`border rounded-[24px] p-3 flex flex-col gap-2.5 shadow-[0_4px_20px_rgba(0,0,0,0.04)] text-left relative group transition-all ${
+                                      theme === "dark" ? "bg-[#252525] border-white/5 shadow-lg" : "bg-white border-zinc-100"
+                                    }`}
+                                  >
+                                    {/* Image Viewport */}
+                                    <div className="w-full aspect-square rounded-[18px] overflow-hidden relative">
+                                      <img
+                                        src={cardImg}
+                                        alt={cardTitle}
+                                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                                      />
+                                    </div>
+
+                                    {/* Info details */}
+                                    <div className="space-y-1.5 pr-0.5">
+                                      {/* Row 1: Title & Rating */}
+                                      <div className="flex items-center justify-between gap-1">
+                                        <h4
+                                          className={`text-sm sm:text-[15px] font-bold tracking-tight truncate ${
+                                            theme === "dark" ? "text-white" : "text-zinc-900"
+                                          }`}
+                                        >
+                                          {cardTitle}
+                                        </h4>
+                                        <div className="flex items-center gap-1 text-xs sm:text-sm font-bold shrink-0">
+                                          <Star className="h-3.5 w-3.5 fill-[#F59E0B] text-[#F59E0B]" />
+                                          <span className={theme === "dark" ? "text-white" : "text-zinc-900"}>
+                                            {card.rating_avg && Number(card.rating_avg) > 0
+                                              ? Number(card.rating_avg).toFixed(1)
+                                              : "4.8"}
+                                          </span>
+                                        </div>
+                                      </div>
+
+                                      {/* Row 2: Status */}
+                                      <div className="flex items-center gap-1.5 text-xs font-semibold text-[#16A34A] dark:text-[#22C55E]">
+                                        <span className="w-1.5 h-1.5 rounded-full bg-[#16A34A] dark:bg-[#22C55E]" />
+                                        <span>{card.status === "closed" ? "Yopiq" : "Ochiq"}</span>
+                                      </div>
+
+                                      {/* Row 3: Distance & Deposit */}
+                                      <div className="flex items-center justify-between text-xs text-zinc-500 dark:text-zinc-400 font-medium">
+                                        <div className="flex items-center gap-1 truncate">
+                                          <Map className="h-3 w-3 shrink-0" />
+                                          <span>
+                                            {card.distance_m
+                                              ? `${(card.distance_m / 1000).toFixed(0)} km`
+                                              : "1.2 km"}
+                                          </span>
+                                        </div>
+                                        <div className="inline-flex items-center gap-1 bg-[#22C55E] text-white px-2 py-0.5 rounded-full text-[10px] font-semibold">
+                                          <span>%</span>
+                                          <span>Depozit</span>
+                                        </div>
+                                      </div>
+
+                                      {/* Row 4: Action Button */}
+                                      <Link
+                                        href={`/venue/${card.id}`}
+                                        className="w-full py-2 text-xs font-bold rounded-full flex items-center justify-center gap-1.5 bg-[#FF6B00] hover:bg-[#E05000] text-white active:scale-95 transition-all shadow-sm shadow-[#FF6B00]/20 mt-1"
+                                      >
+                                        <span>Ko'rish</span>
+                                        <ArrowRight className="h-3.5 w-3.5 stroke-[2.5] text-white" />
+                                      </Link>
+                                    </div>
+                                  </div>
+                                );
+                              });
+                            })()}
+                          </div>
+                        )}
                       </div>
-                    )}
-                  </div>
-                </Link>
-              )}
-            </div>
-
-            {/* 2x2 Grid of Restaurants */}
-            <div className="grid grid-cols-2 gap-4">
-              {rest.map((card, index) => (
-                <div
-                  key={card.id}
-                  className={`border rounded-3xl p-3 flex flex-col gap-3 shadow-md text-left relative ${
-                    theme === "dark" ? "bg-[#393939] border-white/5 shadow-lg" : "bg-white border-zinc-100"
-                  }`}
-                >
-                  {/* Image Viewport */}
-                  <div className={`w-full aspect-[1.1/1] rounded-2xl overflow-hidden relative border ${
-                    theme === "dark" ? "bg-zinc-800 border-white/5" : "bg-zinc-100 border-zinc-100"
-                  }`}>
-                    <img
-                      src={PLACEHOLDER_IMAGES[(index + 1) % PLACEHOLDER_IMAGES.length]}
-                      alt={card.name}
-                      className="w-full h-full object-cover"
-                    />
-                  </div>
-
-                  {/* Info details */}
-                  <div className="space-y-2 pr-0.5">
-                    <div className="flex items-center justify-between gap-1">
-                      <h4 className={`text-xs font-bold tracking-wide truncate ${theme === "dark" ? "text-white" : "text-zinc-950"}`}>{card.name}</h4>
-                      <div className="flex items-center gap-0.5 text-[10px] font-bold text-[#FFB800] shrink-0">
-                        <Star className="h-3 w-3 fill-[#FFB800] text-[#FFB800]" />
-                        <span>{formatRating(card.rating_avg)}</span>
-                      </div>
-                    </div>
-
-                    {/* Distance & Status info */}
-                    <div className={`flex items-center gap-1 text-[10px] font-bold leading-none ${theme === "dark" ? "text-white/50" : "text-zinc-500"}`}>
-                      <Compass className="h-3 w-3 text-zinc-400 dark:text-white/30 shrink-0" />
-                      <span>{formatDistance(card.distance_m) ?? "—"}</span>
-                      <span className="opacity-20">|</span>
-                      <span className={card.is_open_now ? "text-[#10B981]" : "text-zinc-400"}>
-                        {card.is_open_now ? "Ochiq" : "Yopiq"}
-                      </span>
-                    </div>
-
-                    {/* Tagline — the list response carries no street address */}
-                    <div className={`flex items-center gap-1 text-[10px] font-semibold truncate leading-none ${theme === "dark" ? "text-white/40" : "text-zinc-400"}`}>
-                      <MapPin className="h-3 w-3 text-zinc-400 dark:text-white/20 shrink-0" />
-                      <span className="truncate">{card.tagline ?? "—"}</span>
-                    </div>
-
-                    {/* View Button */}
-                    <Link
-                      href={`/venue/${card.id}`}
-                      className={`w-full py-2 text-[10px] font-bold rounded-full flex items-center justify-center gap-1 active:scale-95 transition-all shadow-md mt-1 ${
-                        theme === "dark" 
-                          ? "bg-white text-zinc-950 hover:bg-zinc-100" 
-                          : "bg-[#FF6B00] text-white hover:bg-[#E05000]"
-                      }`}
-                    >
-                      <span>Ko'rish</span>
-                      <ArrowRight className={`h-3 w-3 stroke-[3] ${theme === "dark" ? "text-zinc-950" : "text-white"}`} />
-                    </Link>
-                  </div>
-                </div>
-              ))}
-            </div>
-
+                    );
+                  })()}
+              </div>
           </main>
         </div>
       ) : (
-        /* ==================== ORIGINAL WELCOME ONBOARDING VIEW ==================== */
-        <div className="flex flex-col flex-1 relative">
-          {/* Floating Theme Toggle Button for Onboarding screen */}
+        /* ==================== WELCOME ONBOARDING VIEW ==================== */
+        <div className={`flex flex-col flex-1 relative transition-colors duration-300 ${
+          theme === "dark" ? "bg-[#1E1E1E]" : "bg-white"
+        }`}>
           <div className="absolute top-5 right-5 z-50">
             <button
               type="button"
               onClick={toggleTheme}
-              className="p-2.5 rounded-xl bg-white/10 dark:bg-black/20 border border-white/20 backdrop-blur-md text-white hover:bg-white/20 transition-all active:scale-95 flex items-center justify-center cursor-pointer shadow-lg"
+              className={`p-2.5 rounded-2xl border backdrop-blur-md transition-all active:scale-95 flex items-center justify-center cursor-pointer shadow-md ${
+                theme === "dark"
+                  ? "bg-white/10 border-white/20 text-white hover:bg-white/20"
+                  : "bg-white border-zinc-200 text-zinc-800 hover:bg-zinc-50 shadow-sm"
+              }`}
               aria-label="Toggle theme"
             >
-              {theme === "dark" ? <Sun className="h-5 w-5 text-orange-400 animate-scale-up" /> : <Moon className="h-5 w-5 text-white animate-scale-up" />}
+              {theme === "dark" ? (
+                <Sun className="h-5 w-5 text-orange-400 animate-scale-up" />
+              ) : (
+                <Moon className="h-5 w-5 text-zinc-800 animate-scale-up" />
+              )}
             </button>
           </div>
 
           <Navbar />
 
           <main className="flex-1">
-            <section 
-              className="relative overflow-hidden py-24 lg:py-36 bg-cover bg-center"
-              style={{ backgroundImage: "url('/images/onboarding_bg.jpg')" }}
+            <section
+              className={`relative overflow-hidden py-10 sm:py-12 px-5 transition-colors duration-300 ${
+                theme === "dark" ? "text-white" : "text-zinc-900 bg-gradient-to-b from-orange-50/80 via-white to-white"
+              }`}
             >
-              {/* Glassmorphic dark gradient overlay */}
-              <div className="absolute inset-0 bg-gradient-to-t from-black via-black/75 to-black/60 backdrop-blur-[3px]" />
+              {theme === "dark" && (
+                <>
+                  <div
+                    className="absolute inset-0 bg-cover bg-center"
+                    style={{ backgroundImage: "url('/images/onboarding_bg.jpg')" }}
+                  />
+                  <div className="absolute inset-0 bg-gradient-to-b from-black/85 via-black/90 to-black backdrop-blur-[2px]" />
+                </>
+              )}
 
-              <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 relative z-10 text-center text-white">
-                {/* Tagline */}
-                <div className="inline-flex items-center gap-1.5 rounded-full bg-primary/20 border border-primary/30 px-4 py-1.5 text-sm font-bold text-primary mb-6 animate-pulse backdrop-blur-md">
-                  🎉 Yangi Avlod Marosim Platformasi
+              {/* Ambient Warm Glow */}
+              <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-64 h-64 bg-[#FF6B00]/15 rounded-full blur-3xl pointer-events-none" />
+
+              <div className="relative z-10 text-center flex flex-col items-center">
+                {/* Modern Pill Badge */}
+                <div
+                  className={`inline-flex items-center gap-2 rounded-full px-3.5 py-1.5 text-[11px] font-bold mb-4 backdrop-blur-md shadow-sm border transition-colors ${
+                    theme === "dark"
+                      ? "bg-white/[0.07] border-white/10 text-white/90"
+                      : "bg-orange-500/10 border-orange-500/20 text-[#FF6B00]"
+                  }`}
+                >
+                  <Sparkles className="w-3.5 h-3.5 text-[#FF6B00]" />
+                  <span>Marosimlar & Restoranlar platformasi</span>
                 </div>
 
-                {/* Title */}
-                <h1 className="text-4xl font-extrabold tracking-tight sm:text-6xl max-w-4xl mx-auto leading-tight sm:leading-none text-white">
+                {/* Compact & Punchy Hero Title */}
+                <h1 className={`text-[28px] sm:text-[32px] font-black tracking-tight leading-[1.18] max-w-[320px] transition-colors ${
+                  theme === "dark" ? "text-white" : "text-zinc-950"
+                }`}>
                   Bazmlarni oson{" "}
-                  <span className="text-transparent bg-clip-text bg-gradient-to-r from-primary to-orange-400">
+                  <span className="text-transparent bg-clip-text bg-gradient-to-r from-[#FF6B00] via-[#FF8533] to-[#FFA04D]">
                     rejalashtiring!
                   </span>
                 </h1>
 
-                {/* Subtext */}
-                <p className="mt-6 text-lg sm:text-xl text-white/80 max-w-2xl mx-auto leading-relaxed">
-                  Qidiruv va oson band qilish uchun ilovadan ro'yxatdan o'ting. To'yxonalar, shinam restoranlar va katering xizmatlarini birgina bosish orqali band qiling!
+                {/* Refined Concise Subtitle */}
+                <p className={`mt-3 text-xs sm:text-[13px] max-w-[290px] leading-relaxed font-medium transition-colors ${
+                  theme === "dark" ? "text-white/70" : "text-zinc-600"
+                }`}>
+                  To'yxonalar, shinam restoranlar va katering xizmatlarini birgina ilovada toping va band qiling.
                 </p>
 
-                {/* CTAs */}
-                <div className="mt-10 flex flex-col sm:flex-row items-center justify-center gap-4">
+                {/* Mini Stats Bar for Credibility & Polish */}
+                <div
+                  className={`mt-5 py-2.5 px-4 rounded-2xl border backdrop-blur-md flex items-center justify-around w-full max-w-[330px] shadow-sm transition-colors ${
+                    theme === "dark"
+                      ? "bg-white/[0.05] border-white/10"
+                      : "bg-white/80 border-zinc-200/80 shadow-sm"
+                  }`}
+                >
+                  <div className="text-center">
+                    <span className={`block text-xs font-black ${theme === "dark" ? "text-white" : "text-zinc-900"}`}>120+</span>
+                    <span className={`text-[9px] font-semibold ${theme === "dark" ? "text-zinc-400" : "text-zinc-500"}`}>Zallar</span>
+                  </div>
+                  <span className={`w-px h-5 ${theme === "dark" ? "bg-white/10" : "bg-zinc-200"}`} />
+                  <div className="text-center">
+                    <span className="block text-xs font-black text-[#FFB800] flex items-center justify-center gap-0.5">
+                      <Star className="w-3 h-3 fill-[#FFB800]" />
+                      <span>4.9</span>
+                    </span>
+                    <span className={`text-[9px] font-semibold ${theme === "dark" ? "text-zinc-400" : "text-zinc-500"}`}>Reyting</span>
+                  </div>
+                  <span className={`w-px h-5 ${theme === "dark" ? "bg-white/10" : "bg-zinc-200"}`} />
+                  <div className="text-center">
+                    <span className={`block text-xs font-black ${theme === "dark" ? "text-emerald-400" : "text-emerald-600"}`}>10k+</span>
+                    <span className={`text-[9px] font-semibold ${theme === "dark" ? "text-zinc-400" : "text-zinc-500"}`}>Mijozlar</span>
+                  </div>
+                </div>
+
+                {/* Compact Action Buttons */}
+                <div className="mt-5 flex items-center gap-2.5 w-full max-w-[330px]">
                   <Link
                     href="/login"
-                    className="w-full sm:w-auto inline-flex items-center justify-center rounded-2xl bg-primary px-8 py-4 text-base font-bold text-white shadow-xl shadow-primary/30 hover:bg-primary-hover hover:scale-[1.02] transition-all duration-200"
+                    className="flex-1 h-12 rounded-2xl bg-gradient-to-r from-[#FF6B00] to-[#FF8533] text-white font-extrabold text-xs shadow-lg shadow-[#FF6B00]/25 flex items-center justify-center gap-1.5 active:scale-95 transition-all hover:brightness-110 cursor-pointer"
                   >
-                    Ro'yxatdan o'tish
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2.5"
-                      className="ml-2 h-5 w-5"
-                    >
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" />
-                    </svg>
+                    <span>Ro'yxatdan o'tish</span>
+                    <ArrowRight className="w-3.5 h-3.5 stroke-[2.5]" />
                   </Link>
                   <Link
                     href="/feed"
-                    className="w-full sm:w-auto inline-flex items-center justify-center rounded-2xl bg-white/10 border border-white/20 backdrop-blur-md px-8 py-4 text-base font-bold text-white hover:bg-white/20 hover:scale-[1.02] transition-all duration-200"
+                    className={`flex-1 h-12 rounded-2xl border font-extrabold text-xs flex items-center justify-center gap-1.5 active:scale-95 transition-all cursor-pointer ${
+                      theme === "dark"
+                        ? "bg-white/[0.08] hover:bg-white/[0.12] border-white/10 text-white backdrop-blur-md"
+                        : "bg-white hover:bg-zinc-50 border-zinc-200 text-zinc-900 shadow-sm"
+                    }`}
                   >
-                    Zallarni Ko'rish
+                    <Compass className="w-3.5 h-3.5 text-primary" />
+                    <span>Zallarni ko'rish</span>
                   </Link>
                 </div>
               </div>
             </section>
 
-            {/* Feature/Category Section */}
-            <section className="py-16 bg-foreground/3 dark:bg-white/3">
-              <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-                <div className="text-center max-w-2xl mx-auto mb-12">
-                  <h2 className="text-3xl font-extrabold tracking-tight sm:text-4xl">
-                    Biz nimalarni taklif qilamiz?
-                  </h2>
-                  <p className="mt-4 text-foreground/70">
-                    Sizning barcha shodiyonalaringiz va bayramlaringiz uchun mukammal yechimlar.
-                  </p>
-                </div>
+            <section className={`py-10 px-4 transition-colors ${
+              theme === "dark" ? "bg-[#1C1C1E]/50" : "bg-zinc-50/70"
+            }`}>
+              <div className="text-center mb-6">
+                <h2 className={`text-2xl font-black tracking-tight ${
+                  theme === "dark" ? "text-white" : "text-zinc-900"
+                }`}>
+                  Biz nimalarni taklif qilamiz?
+                </h2>
+                <p className={`mt-2 text-xs max-w-xs mx-auto leading-relaxed ${
+                  theme === "dark" ? "text-zinc-400" : "text-zinc-500"
+                }`}>
+                  Sizning barcha shodiyonalaringiz va bayramlaringiz uchun mukammal yechimlar.
+                </p>
+              </div>
 
-                <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
-                  {welcomeCategories.map((cat, idx) => (
-                    <div
-                      key={idx}
-                      className="group relative rounded-3xl bg-brand-light-card dark:bg-brand-dark-card border border-brand-light-border dark:border-brand-dark-border p-6 shadow-sm hover:shadow-md hover:border-primary/50 dark:hover:border-primary/50 transition-all duration-300 hover:-translate-y-1"
-                    >
-                      <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/10 text-3xl mb-5 group-hover:scale-110 transition-transform duration-300">
+              {/* 2x2 Clean Responsive Grid */}
+              <div className="grid grid-cols-2 gap-3">
+                {welcomeCategories.map((cat, idx) => (
+                  <Link
+                    key={idx}
+                    href="/feed"
+                    className={`group relative rounded-[24px] border p-4 transition-all duration-300 active:scale-[0.98] flex flex-col justify-between text-left ${
+                      theme === "dark"
+                        ? "bg-[#2C2C2E] border-white/10 hover:border-primary/40 shadow-sm"
+                        : "bg-white border-zinc-200/90 shadow-[0_4px_16px_rgba(0,0,0,0.04)] hover:shadow-md hover:border-primary/40"
+                    }`}
+                  >
+                    <div>
+                      <div className={`flex h-12 w-12 items-center justify-center rounded-2xl text-2xl mb-3 group-hover:scale-110 transition-transform duration-300 border ${
+                        theme === "dark"
+                          ? "bg-white/5 border-white/5"
+                          : "bg-orange-50/70 border-orange-100/60"
+                      }`}>
                         {cat.icon}
                       </div>
-                      <h3 className="text-xl font-bold mb-2 text-foreground group-hover:text-primary transition-colors duration-200">
+                      <h3 className={`text-sm font-extrabold group-hover:text-primary transition-colors duration-200 leading-tight mb-1 ${
+                        theme === "dark" ? "text-white" : "text-zinc-900"
+                      }`}>
                         {cat.title}
                       </h3>
-                      <p className="text-sm text-foreground/60 mb-4">{cat.desc}</p>
-                      <span className="inline-flex items-center rounded-lg bg-foreground/5 dark:bg-white/5 px-2.5 py-1 text-xs font-bold text-primary">
+                      <p className={`text-[11px] leading-snug mb-3 ${
+                        theme === "dark" ? "text-zinc-400" : "text-zinc-500"
+                      }`}>
+                        {cat.desc}
+                      </p>
+                    </div>
+                    <div>
+                      <span className={`inline-flex items-center rounded-lg px-2.5 py-1 text-[10px] font-black border ${
+                        theme === "dark"
+                          ? "bg-primary/10 border-primary/20 text-primary"
+                          : "bg-orange-50 border-orange-200/60 text-[#FF6B00]"
+                      }`}>
                         {cat.count}
                       </span>
                     </div>
-                  ))}
-                </div>
-              </div>
-            </section>
-
-            {/* Dynamic Interactive Features Mockup */}
-            <section className="py-20 overflow-hidden">
-              <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-                <div className="rounded-3xl bg-gradient-to-br from-primary/20 via-orange-500/5 to-transparent border border-primary/20 p-8 sm:p-12 lg:p-16 flex flex-col lg:flex-row items-center gap-12">
-                  <div className="flex-1 text-center lg:text-left">
-                    <span className="text-xs font-bold uppercase tracking-widest text-primary">
-                      Premium interfeys va qulaylik
-                    </span>
-                    <h2 className="text-3xl font-extrabold tracking-tight sm:text-5xl mt-3 text-foreground">
-                      Hamma narsa bir joyda
-                    </h2>
-                    <p className="mt-4 text-base sm:text-lg text-foreground/75 leading-relaxed">
-                      Ilovadan foydalanib, marosimingizning sanasini tekshiring, interfaol kalendardan bo'sh kunlarni ko'ring, to'lovlarni amalga oshiring va kirish chiptasini (QR kod) qo'lga kiriting. Ortiqcha ovvoragarchiliklarsiz, ishonchli band qiling!
-                    </p>
-                    <div className="mt-8 flex flex-wrap justify-center lg:justify-start gap-6">
-                      <div className="flex items-center gap-2">
-                        <span className="h-2 w-2 rounded-full bg-primary" />
-                        <span className="text-sm font-semibold text-foreground/80">Tezkor bron</span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <span className="h-2 w-2 rounded-full bg-primary" />
-                        <span className="text-sm font-semibold text-foreground/80">Xavfsiz to'lov</span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <span className="h-2 w-2 rounded-full bg-primary" />
-                        <span className="text-sm font-semibold text-foreground/80">QR chipta</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Decorative design graphic */}
-                  <div className="flex-1 w-full max-w-md relative animate-float">
-                    <div className="rounded-3xl bg-brand-light-card dark:bg-brand-dark-card border border-brand-light-border dark:border-brand-dark-border shadow-2xl p-6 relative z-10">
-                      <div className="flex items-center justify-between border-b border-brand-light-border dark:border-brand-dark-border pb-4 mb-4">
-                        <div className="flex items-center gap-3">
-                          <div className="h-10 w-10 rounded-full bg-primary/20 flex items-center justify-center text-xl">
-                            👑
-                          </div>
-                          <div>
-                            <h4 className="font-bold text-foreground text-sm">Oltin Saroy To'yxonasi</h4>
-                            <p className="text-xs text-foreground/50">Toshkent sh., Yunusobod</p>
-                          </div>
-                        </div>
-                        <span className="text-sm font-bold text-primary">★★★★★ 4.9</span>
-                      </div>
-                      <div className="h-40 rounded-2xl bg-gradient-to-r from-primary/30 to-orange-500/20 flex items-center justify-center text-5xl mb-4">
-                        🎉
-                      </div>
-                      <div className="flex items-center justify-between text-xs text-foreground/60 mb-4">
-                        <span>Sig'imi: 500 kishi</span>
-                        <span>Narxi: 12,000,000 UZS dan</span>
-                      </div>
-                      <Link
-                        href="/feed"
-                        className="block w-full text-center py-2.5 rounded-xl bg-primary text-white font-bold hover:bg-primary-hover transition-colors duration-200 text-sm"
-                      >
-                        Hozir Bron Qilish
-                      </Link>
-                    </div>
-                    {/* Decorative glowing blur */}
-                    <div className="absolute inset-0 bg-primary/20 blur-3xl rounded-full scale-90 -z-10" />
-                  </div>
-                </div>
+                  </Link>
+                ))}
               </div>
             </section>
           </main>
 
-          {/* Footer */}
-          <footer className="border-t border-brand-light-border dark:border-brand-dark-border py-8 text-center text-sm text-foreground/50">
+          <footer className={`border-t py-4 text-center text-xs transition-colors ${
+            theme === "dark" ? "border-white/10 text-zinc-500" : "border-zinc-200 text-zinc-400"
+          }`}>
             <p>© 2026 BAZMLY. Barcha huquqlar himoyalangan.</p>
           </footer>
         </div>
       )}
 
+      {/* Booking Success Toast */}
       {showBookingSuccessToast && (
         <div className="fixed bottom-24 left-1/2 transform -translate-x-1/2 z-[100] px-5 py-3 rounded-2xl bg-[#FF6B00] text-white text-xs font-black shadow-2xl flex items-center gap-2 border border-white/20 animate-bounce select-none">
           <CheckCircle className="h-4.5 w-4.5 shrink-0" />
@@ -858,18 +1488,26 @@ export default function WelcomePage() {
         </div>
       )}
 
-      {/* Partiya Soni & Kun va Vaqt Bottom Sheet Overlay (2-rasm) */}
+      {/* General Toast */}
+      {toastMessage && (
+        <div className="fixed top-6 left-1/2 transform -translate-x-1/2 z-[120] px-5 py-3 rounded-2xl bg-zinc-900 text-white text-xs font-bold shadow-2xl border border-white/10 animate-fade-in flex items-center gap-2">
+          <span>{toastMessage}</span>
+        </div>
+      )}
+
+      {/* Partiya Soni & Kun va Vaqt Bottom Sheet Overlay */}
       {showPartySheet && (
         <div className="fixed inset-0 z-50 flex flex-col justify-end max-w-md mx-auto bg-black/60 backdrop-blur-sm transition-all duration-300">
           <div className="absolute inset-0 z-0" onClick={() => setShowPartySheet(false)} />
-          
+
           <div className="w-full bg-brand-light-card dark:bg-[#393939] border-t border-brand-light-border dark:border-white/5 rounded-t-[36px] px-6 pb-9 pt-4 shadow-2xl relative z-10 flex flex-col gap-6 animate-slide-up select-none">
-            
             <div className="w-10 h-1.5 bg-foreground/10 dark:bg-white/10 rounded-full mx-auto" />
-            
+
             <div className="flex items-center justify-between">
-              <span className="text-[10px] font-bold text-foreground/50 dark:text-zinc-500 uppercase tracking-widest">Partiya sozlamalari</span>
-              <button 
+              <span className="text-[10px] font-bold text-foreground/50 dark:text-zinc-500 uppercase tracking-widest">
+                Partiya sozlamalari
+              </span>
+              <button
                 onClick={() => setShowPartySheet(false)}
                 className="w-8 h-8 rounded-full bg-foreground/5 dark:bg-white/5 flex items-center justify-center text-foreground/60 dark:text-zinc-400 hover:text-[#FF6B00] dark:hover:text-white"
               >
@@ -878,17 +1516,17 @@ export default function WelcomePage() {
             </div>
 
             <div className="space-y-3.5 text-left">
-              <h3 className="font-extrabold text-sm text-foreground dark:text-white">Partiya soni</h3>
+              <h3 className="font-extrabold text-sm text-foreground dark:text-white">Partiya soni (mehmonlar)</h3>
               <div className="flex justify-between items-center gap-3">
-                {[1, 2, 3, 4, 5].map((num) => {
+                {[1, 2, 3, 4, 5, 8].map((num) => {
                   const isSelected = partySize === num;
                   return (
                     <button
                       key={num}
                       onClick={() => setPartySize(num)}
                       className={`flex-1 py-3 text-base font-extrabold rounded-2xl transition-all cursor-pointer ${
-                        isSelected 
-                          ? "border border-[#FF6B00] bg-[#FF6B00]/5 text-[#FF6B00] scale-105" 
+                        isSelected
+                          ? "border border-[#FF6B00] bg-[#FF6B00]/5 text-[#FF6B00] scale-105"
                           : "border border-brand-light-border dark:border-white/5 bg-foreground/5 dark:bg-zinc-900 text-foreground dark:text-white"
                       }`}
                     >
@@ -901,13 +1539,12 @@ export default function WelcomePage() {
 
             <div className="space-y-3.5 text-left">
               <h3 className="font-extrabold text-sm text-foreground dark:text-white">Kun va vaqt</h3>
-              
+
               <div className="grid grid-cols-2 gap-6 py-4 bg-foreground/5 dark:bg-zinc-900/60 rounded-2xl relative border border-brand-light-border dark:border-white/5 overflow-hidden h-[120px] select-none">
-                {/* Center Highlight Bar overlay */}
                 <div className="absolute top-1/2 -translate-y-1/2 left-4 right-4 h-10 border-y border-brand-light-border/40 dark:border-zinc-800 pointer-events-none z-20" />
-                
+
                 {/* Left Column (Days) */}
-                <div 
+                <div
                   ref={dayScrollRef}
                   onMouseDown={handleDayMouseDown}
                   onMouseMove={handleDayMouseMove}
@@ -934,7 +1571,7 @@ export default function WelcomePage() {
                 </div>
 
                 {/* Right Column (Times) */}
-                <div 
+                <div
                   ref={timeScrollRef}
                   onMouseDown={handleTimeMouseDown}
                   onMouseMove={handleTimeMouseMove}
@@ -965,111 +1602,329 @@ export default function WelcomePage() {
             <button
               onClick={() => {
                 setShowPartySheet(false);
-                setShowLocationSearch(true);
+                setGuestCountFilter(partySize);
+                setToastMessage(`${partySize} kishilik joylar saralanmoqda...`);
               }}
-              className="w-full py-4.5 bg-[#FF6B00] hover:bg-[#E05000] text-white font-extrabold text-sm rounded-[24px] shadow-lg shadow-[#FF6B00]/20 hover:scale-[1.01] active:scale-[0.99] transition-all duration-200"
+              className="w-full py-4.5 bg-[#FF6B00] hover:bg-[#E05000] text-white font-extrabold text-sm rounded-[24px] shadow-lg shadow-[#FF6B00]/20 hover:scale-[1.01] active:scale-[0.99] transition-all duration-200 cursor-pointer"
             >
-              Izlash
+              Izlash ({partySize} kishi, {selectedDay} {selectedTime})
             </button>
           </div>
         </div>
       )}
 
-      {/* Location Search Overlay (2-rasm).
-
-          Above the bottom navigation, not level with it: both are fixed, and at
-          equal z-index the nav wins on document order and swallows taps on the
-          districts nearest the foot of the list. */}
+      {/* Location Search Overlay */}
       {showLocationSearch && (
-        <div className="fixed inset-0 z-60 bg-brand-light-surface dark:bg-[var(--background)] flex flex-col max-w-md mx-auto shadow-2xl animate-fade-in text-foreground dark:text-white select-none">
-          {/* Header Row */}
+        <div className="fixed inset-0 z-50 bg-brand-light-surface dark:bg-[var(--background)] flex flex-col max-w-md mx-auto shadow-2xl animate-fade-in text-foreground dark:text-white select-none">
+          {/* Header Row with Search Input */}
           <div className="flex items-center gap-3 px-6 py-5 border-b border-brand-light-border dark:border-white/5 bg-brand-light-surface dark:bg-[var(--background)] z-30 sticky top-0">
             <button
-              onClick={() => setShowLocationSearch(false)}
-              className="p-2.5 rounded-xl bg-brand-light-card dark:bg-[#393939] border border-brand-light-border dark:border-white/5 text-foreground/80 dark:text-white/80 hover:text-white transition-all active:scale-90"
+              onClick={() => {
+                setShowLocationSearch(false);
+                setLocationSearchInput("");
+              }}
+              className="p-2.5 rounded-xl bg-brand-light-card dark:bg-[#393939] border border-brand-light-border dark:border-white/5 text-foreground/80 dark:text-white/80 hover:text-white transition-all active:scale-90 cursor-pointer"
             >
               <ChevronLeft className="h-5 w-5" />
             </button>
-            <h2 className="text-lg font-black text-foreground dark:text-white">Manzil</h2>
+
+            <div className="flex-1 flex items-center bg-brand-light-card dark:bg-[#393939] border border-brand-light-border dark:border-white/5 rounded-2xl overflow-hidden focus-within:border-[#FF6B00]/40 transition-all px-4 py-3">
+              <Search className="h-4.5 w-4.5 text-foreground/40 dark:text-zinc-500 shrink-0" />
+              <input
+                type="text"
+                value={locationSearchInput}
+                onChange={(e) => setLocationSearchInput(e.target.value)}
+                placeholder="Viloyat yoki tuman qidirish..."
+                className="w-full bg-transparent border-0 p-0 pl-2.5 text-sm font-bold text-foreground dark:text-white focus:ring-0 outline-none placeholder:text-foreground/30 dark:placeholder:text-zinc-600"
+              />
+              {locationSearchInput && (
+                <button
+                  type="button"
+                  onClick={() => setLocationSearchInput("")}
+                  className="text-zinc-400 hover:text-white p-1 cursor-pointer"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              )}
+            </div>
           </div>
 
-          {/* Action: Manzilni avtomatik aniqlash */}
+          {/* Action: Manzilni avtomatik aniqlash (GPS) */}
           <button
-            onClick={detect}
-            disabled={locationStatus === "locating"}
-            className="w-full px-6 py-5 border-b border-brand-light-border dark:border-white/5 flex items-center gap-3.5 hover:bg-foreground/5 dark:hover:bg-white/5 transition-colors cursor-pointer text-left disabled:opacity-60"
+            onClick={handleAutoLocation}
+            disabled={geoDetecting}
+            className="w-full px-6 py-4.5 border-b border-brand-light-border dark:border-white/5 flex items-center gap-3.5 hover:bg-foreground/5 dark:hover:bg-white/5 transition-colors cursor-pointer text-left disabled:opacity-50"
           >
-            {/* Compass / Navigation Icon */}
-            <div className="text-[#FF6B00]">
-              <svg className="w-5 h-5 fill-current" viewBox="0 0 24 24">
-                <path d="M12 2L2 22l10-4 10 4L12 2z" />
-              </svg>
+            <div className="w-10 h-10 rounded-full bg-[#FF6B00]/10 flex items-center justify-center text-[#FF6B00] shrink-0">
+              {geoDetecting ? (
+                <Loader2 className="w-5 h-5 animate-spin" />
+              ) : (
+                <Compass className="w-5 h-5" />
+              )}
             </div>
-            <span className="text-sm font-black text-foreground dark:text-white">
-              {locationStatus === "locating"
-                ? "Aniqlanmoqda..."
-                : "Manzilni avtomatik aniqlash"}
-            </span>
+            <div>
+              <span className="text-sm font-black text-foreground dark:text-white block">
+                {geoDetecting ? "Joylashuv aniqlanmoqda..." : "Manzilni avtomatik aniqlash"}
+              </span>
+              <span className="text-[10px] text-zinc-400">GPS koordinata orqali eng yaqin tuman</span>
+            </div>
           </button>
 
-          {/* Why the automatic route came back empty, in the customer's words.
-              Without this a refused permission looks like a broken button. */}
-          {LOCATION_PROBLEMS[locationStatus] && (
-            <p className="px-6 py-4 text-xs font-bold text-red-500 border-b border-brand-light-border dark:border-white/5">
-              {LOCATION_PROBLEMS[locationStatus]}
-            </p>
-          )}
-
-          {/* Section: the districts of the region we are in, so a customer can
-              move to the next tuman without leaving the screen. */}
-          <div className="flex-1 overflow-y-auto px-6 py-6 space-y-4 text-left">
-            <h3 className="text-sm font-black text-foreground/40 dark:text-zinc-400 tracking-wide">
-              {location ? location.regionName : "Tumanni tanlang"}
-            </h3>
-
-            {!location && (
-              <p className="text-xs font-bold text-foreground/50 dark:text-zinc-500">
-                Manzilni aniqlang yoki{" "}
-                <Link href="/feed" className="text-[#FF6B00] underline">
-                  viloyat va tumanni qo&apos;lda tanlang
-                </Link>
-                .
-              </p>
+          {/* Scrollable List */}
+          <div className="flex-1 px-6 py-5 space-y-6 text-left overflow-y-auto">
+            {/* Top Quick Option: Barcha tumanlar */}
+            {!locationSearchInput.trim() && (
+              <button
+                type="button"
+                onClick={() => handleSelectDistrict(null, "Toshkent shahri (Barcha tumanlar)")}
+                className={`w-full py-3.5 px-4 rounded-2xl border flex items-center justify-between transition-all cursor-pointer ${
+                  selectedDistrictId === null
+                    ? "bg-[#FF6B00]/10 border-[#FF6B00] text-[#FF6B00] font-bold"
+                    : "border-brand-light-border dark:border-white/5 bg-brand-light-card/60 dark:bg-[#393939]/40 hover:bg-foreground/5 dark:hover:bg-white/5 text-foreground dark:text-white"
+                }`}
+              >
+                <div className="flex items-center gap-3">
+                  <div className="w-8 h-8 rounded-xl bg-[#FF6B00]/15 flex items-center justify-center text-[#FF6B00] shrink-0">
+                    <Globe className="h-4.5 w-4.5" />
+                  </div>
+                  <div className="text-left">
+                    <span className="text-sm font-bold block">Barcha tumanlar</span>
+                    <span className="text-[10px] opacity-60">Barcha restoran va to'yxonalarni ko'rish</span>
+                  </div>
+                </div>
+                {selectedDistrictId === null && <Check className="h-4 w-4 text-[#FF6B00]" />}
+              </button>
+            )}
+            {/* Oxirgi manzillar (if any) */}
+            {recentLocations.length > 0 && !locationSearchInput.trim() && (
+              <div className="space-y-2.5">
+                <h3 className="text-xs font-extrabold text-foreground/40 dark:text-zinc-400 tracking-wider uppercase">
+                  Oxirgi manzillar
+                </h3>
+                <div className="space-y-1">
+                  {recentLocations.map((loc) => (
+                    <button
+                      key={loc.id}
+                      onClick={() => handleSelectDistrict(loc.district_id, loc.label)}
+                      className="w-full py-3 px-3.5 rounded-xl border border-transparent hover:border-brand-light-border dark:hover:border-white/5 flex items-center gap-3 hover:bg-foreground/5 dark:hover:bg-white/5 transition-colors cursor-pointer text-left"
+                    >
+                      <MapPin className="h-4 w-4 text-[#FF6B00] shrink-0" />
+                      <span className="text-sm font-bold text-foreground/90 dark:text-white/90 truncate">{loc.label}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
             )}
 
-            <div className="space-y-1">
-              {nearbyDistricts.map((district) => {
-                const isCurrent = district.id === location?.districtId;
-                return (
-                  <button
-                    key={district.id}
-                    onClick={() => {
-                      if (location) choose({ id: location.regionId, name: location.regionName }, district);
-                      setShowLocationSearch(false);
-                    }}
-                    className="w-full py-4 border-b border-brand-light-border dark:border-white/5 last:border-b-0 flex items-center gap-3.5 hover:bg-foreground/5 dark:hover:bg-white/5 transition-colors cursor-pointer text-left"
-                  >
-                    <MapPin
-                      className={`h-5 w-5 shrink-0 ${
-                        isCurrent ? "text-[#FF6B00]" : "text-foreground/30 dark:text-zinc-500"
-                      }`}
-                    />
-                    <span
-                      className={`text-sm font-bold ${
-                        isCurrent
-                          ? "text-[#FF6B00]"
-                          : "text-foreground/90 dark:text-white/90"
-                      }`}
-                    >
-                      {district.name}
-                    </span>
-                  </button>
-                );
-              })}
+            {/* Barcha viloyatlar va tumanlar */}
+            <div className="space-y-3">
+              <h3 className="text-xs font-extrabold text-foreground/40 dark:text-zinc-400 tracking-wider uppercase">
+                {locationSearchInput.trim() ? "Qidiruv natijalari" : "Viloyatlar va tumanlar"}
+              </h3>
+
+              <div className="space-y-2">
+                {geoRegions
+                  .filter((r) =>
+                    !locationSearchInput.trim() ||
+                    r.name.toLowerCase().includes(locationSearchInput.toLowerCase())
+                  )
+                  .map((region) => {
+                    const isExpanded = activeRegionId === region.id;
+                    const districts = regionDistrictsMap[region.id] || [];
+                    const isLoadingDistricts = loadingDistrictsFor === region.id;
+
+                    return (
+                      <div
+                        key={region.id}
+                        className={`rounded-2xl border transition-all overflow-hidden ${
+                          isExpanded
+                            ? "border-[#FF6B00]/40 bg-[#FF6B00]/5 dark:bg-white/[0.02]"
+                            : "border-brand-light-border dark:border-white/5 bg-brand-light-card/50 dark:bg-[#393939]/30"
+                        }`}
+                      >
+                        {/* Region Header Button */}
+                        <button
+                          type="button"
+                          onClick={() => handleToggleRegion(region.id)}
+                          className="w-full px-4 py-3.5 flex items-center justify-between text-left cursor-pointer hover:opacity-90"
+                        >
+                          <div className="flex items-center gap-2.5">
+                            <span className="text-base font-bold text-foreground dark:text-white">
+                              {region.name}
+                            </span>
+                            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-foreground/5 dark:bg-white/10 text-foreground/60 dark:text-white/60">
+                              {region.code}
+                            </span>
+                          </div>
+                          <ChevronDown
+                            className={`h-4 w-4 transition-transform duration-200 text-foreground/40 dark:text-zinc-400 ${
+                              isExpanded ? "rotate-180 text-[#FF6B00]" : ""
+                            }`}
+                          />
+                        </button>
+
+                        {/* Districts list inside region */}
+                        {isExpanded && (
+                          <div className="px-3 pb-3 pt-1 border-t border-brand-light-border/60 dark:border-white/5 space-y-1">
+                            {isLoadingDistricts ? (
+                              <div className="py-4 flex items-center justify-center gap-2 text-xs text-zinc-400">
+                                <Loader2 className="h-4 w-4 animate-spin text-[#FF6B00]" />
+                                <span>Tumanlar yuklanmoqda...</span>
+                              </div>
+                            ) : districts.length > 0 ? (
+                              districts.map((district) => {
+                                const isCurrent = selectedDistrictId === district.id;
+                                return (
+                                  <button
+                                    key={district.id}
+                                    type="button"
+                                    onClick={() => handleSelectDistrict(district.id, `${region.name}, ${district.name}`)}
+                                    className={`w-full py-2.5 px-3 rounded-xl flex items-center justify-between text-xs font-bold transition-all cursor-pointer ${
+                                      isCurrent
+                                        ? "bg-[#FF6B00] text-white shadow-sm"
+                                        : "hover:bg-foreground/5 dark:hover:bg-white/10 text-foreground/80 dark:text-white/80"
+                                    }`}
+                                  >
+                                    <span>{district.name}</span>
+                                    {isCurrent && <Check className="h-3.5 w-3.5" />}
+                                  </button>
+                                );
+                              })
+                            ) : (
+                              <p className="py-2 text-center text-xs text-zinc-400">Tumanlar topilmadi</p>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+              </div>
             </div>
           </div>
         </div>
       )}
+
+
+
+      {/* ==================== NOTIFICATIONS DRAWER MODAL ==================== */}
+      {showNotificationsModal && (
+        <div className="fixed inset-0 z-[100] bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center animate-fade-in p-4">
+          <div className="absolute inset-0" onClick={() => setShowNotificationsModal(false)} />
+          <div
+            className={`w-full max-w-md rounded-[32px] p-6 flex flex-col gap-4 z-10 border relative text-left shadow-2xl ${
+              theme === "dark" ? "bg-[#2C2C2E] border-white/10" : "bg-white border-zinc-200"
+            }`}
+          >
+            <div className="flex justify-between items-center">
+              <div className="flex items-center gap-2">
+                <div className="p-2 rounded-xl bg-primary/10 text-primary">
+                  <Bell className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="font-black text-base">Bildirishnomalar</h3>
+                  <p className="text-[11px] text-zinc-400 font-bold">Ilova xabarnomalari</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowNotificationsModal(false)}
+                className="p-2 rounded-full bg-white/5 hover:bg-white/10 text-zinc-400 cursor-pointer"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            {/* Quick Actions */}
+            {notifications.length > 0 && (
+              <div className="flex justify-end pt-1">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    await engagementService.markAllNotificationsRead().catch(() => {});
+                    setUnreadCount(0);
+                    setNotifications((prev) => prev.map((n) => ({ ...n, read_at: new Date().toISOString() })));
+                    setToastMessage("Barcha bildirishnomalar o'qildi deb belgilandi");
+                  }}
+                  className="text-xs font-bold text-primary hover:underline cursor-pointer"
+                >
+                  Barchasini o'qilgan qilish
+                </button>
+              </div>
+            )}
+
+            {/* Notifications List */}
+            <div className="max-h-72 overflow-y-auto space-y-2.5 py-1">
+              {(notifications.length > 0 ? notifications : [
+                {
+                  id: 1,
+                  type: "booking",
+                  title: "Bron muvaffaqiyatli tasdiqlandi 🎉",
+                  body: "Bahor restoranidagi 4-stol uchun buyurtmangiz tasdiqlandi. Chiptangiz 'Chiptalar' bo'limida mavjud.",
+                  payload: null,
+                  read_at: null,
+                  sent_at: new Date().toISOString(),
+                },
+                {
+                  id: 2,
+                  type: "promo",
+                  title: "Yangi 15% chegirmali promokod",
+                  body: "Ushbu dam olish kunlari uchun barcha to'yxonalarga 'BAZM15' kodi bilan 15% chegirma!",
+                  payload: null,
+                  read_at: new Date(Date.now() - 3600000).toISOString(),
+                  sent_at: new Date(Date.now() - 3600000).toISOString(),
+                },
+              ]).map((n) => {
+                const isRead = !!n.read_at;
+                return (
+                  <div
+                    key={n.id}
+                    className={`p-3.5 rounded-2xl border transition-all text-left ${
+                      !isRead
+                        ? "bg-primary/5 border-primary/20"
+                        : theme === "dark"
+                        ? "bg-white/5 border-white/5"
+                        : "bg-zinc-50 border-zinc-100"
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <h5 className="font-extrabold text-xs text-foreground dark:text-white leading-tight">
+                        {n.title}
+                      </h5>
+                      {!isRead && (
+                        <span className="w-2 h-2 rounded-full bg-primary shrink-0 mt-0.5" />
+                      )}
+                    </div>
+                    <p className="text-[11px] text-zinc-500 dark:text-zinc-400 mt-1 leading-relaxed">
+                      {n.body}
+                    </p>
+                  </div>
+                );
+              })}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setShowNotificationsModal(false)}
+              className="w-full py-3.5 bg-zinc-100 dark:bg-white/10 hover:bg-zinc-200 text-foreground dark:text-white font-bold text-xs rounded-2xl transition-colors cursor-pointer mt-1"
+            >
+              Yopish
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Toyxona Booking Flow Modal */}
+      <ToyxonaFlowModal
+        isOpen={showToyxonaModal}
+        onClose={() => setShowToyxonaModal(false)}
+        venue={selectedToyxonaVenue}
+        theme={theme}
+        initialStep={toyxonaModalStep}
+        onSuccess={() => {
+          setToastMessage("To'yxona muvaffaqiyatli band qilindi!");
+          setShowBookingSuccessToast(true);
+        }}
+      />
     </div>
   );
 }

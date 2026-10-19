@@ -1,10 +1,9 @@
 "use client";
 
 import { createContext, useContext, useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { authKeys, getMe, telegramLogin } from "@/lib/api/endpoints/auth";
-import { hasSession } from "@/lib/api/auth-tokens";
+import { useAuth } from "@/contexts/AuthContext";
+import { getAccessToken, getRefreshToken } from "@/lib/api";
 import { TelegramPhoneStep } from "@/components/telegram-phone-step";
 import {
   announceReady,
@@ -24,6 +23,9 @@ import type { TelegramWebAppUser } from "@/lib/telegram/types";
  *
  * Outside Telegram it does nothing at all and the phone-and-password flow stays
  * exactly as it was — the app is still a website, and this must not break it.
+ *
+ * Sits inside `AuthProvider`: the session it opens is the same one every screen
+ * reads through `useAuth`.
  */
 
 type TelegramStatus = "outside" | "signing-in" | "ready" | "failed";
@@ -63,13 +65,13 @@ function outsideOnServer(): boolean {
 
 export function TelegramProvider({ children }: { children: React.ReactNode }) {
   const inside = useSyncExternalStore(noChanges, insideSnapshot, outsideOnServer);
+  const { user: account, loading, loginTelegram } = useAuth();
   // Only the outcome is state. "Signing in" is the absence of an outcome, so it
   // needs no setter and shows from the very first render rather than after one.
   const [outcome, setOutcome] = useState<{ done: boolean; error: string | null }>({
     done: false,
     error: null,
   });
-  const queryClient = useQueryClient();
 
   // Strict Mode mounts effects twice in development. Without this guard the
   // second run fires a second sign-in, and two concurrent ones would each
@@ -82,28 +84,24 @@ export function TelegramProvider({ children }: { children: React.ReactNode }) {
 
     announceReady();
 
-    const initData = getInitData();
-    if (!initData) return;
-
     // An existing session wins. Trading initData again would open a second
     // refresh-token family for the same person, and the older one would keep
-    // working until it expired. Both branches settle through a promise so the
+    // working until it expired. Every branch settles through a promise so the
     // outcome is only ever recorded from a callback, never mid-effect.
-    const signedIn = hasSession() ? Promise.resolve(false) : telegramLogin(initData).then(() => true);
+    const initData = getInitData();
+    const hasSession = getAccessToken() !== null || getRefreshToken() !== null;
+    const signedIn =
+      !initData || hasSession ? Promise.resolve() : loginTelegram(initData).then(() => undefined);
 
     signedIn
-      .then((isNew) => {
-        setOutcome({ done: true, error: null });
-        // Anything already asking "who am I" was answered "nobody" a moment ago.
-        if (isNew) void queryClient.invalidateQueries();
-      })
+      .then(() => setOutcome({ done: true, error: null }))
       .catch((caught: unknown) => {
         setOutcome({
           done: true,
           error: caught instanceof Error ? caught.message : "Telegram orqali kirib bo'lmadi",
         });
       });
-  }, [inside, queryClient]);
+  }, [inside, loginTelegram]);
 
   // Not gated on `inside`: the height is a layout concern, not an identity one.
   // A runtime that reports a viewport gets used even when it hands over no
@@ -120,27 +118,18 @@ export function TelegramProvider({ children }: { children: React.ReactNode }) {
 
   const user = inside ? (getWebApp()?.initDataUnsafe.user ?? null) : null;
 
-  // Only once signed in — before that there is no account to have a number.
-  const me = useQuery({
-    queryKey: authKeys.me(),
-    queryFn: ({ signal }) => getMe(signal),
-    enabled: status === "ready",
-    retry: false,
-  });
-
-  // Dismissed for this launch, not for ever: `sessionStorage` clears when the
-  // Mini App is closed, so someone who said "later" is asked again next time
-  // rather than never.
+  // Dismissed for this launch, not for ever: someone who said "later" is asked
+  // again next time the Mini App opens rather than never.
   const [skipped, setSkipped] = useState(false);
-  const needsPhone = status === "ready" && me.data !== undefined && me.data.phone === null;
+  const needsPhone = status === "ready" && !loading && account !== null && !account.phone;
 
   return (
     <TelegramContext.Provider value={{ inside, status, user, error: outcome.error }}>
       {/*
         Nothing renders until sign-in settles, and only inside Telegram. The
         screens below start fetching on mount, and without this they would all
-        fire before there is a session, take a 401 each, and then refetch once
-        the token lands. `failed` still renders — a Telegram user whose sign-in
+        fire before there is a session, take a 401 each, and drop the user to
+        the login screen. `failed` still renders — a Telegram user whose sign-in
         broke should land in the ordinary app, not on a blank screen.
       */}
       {status === "signing-in" ? (

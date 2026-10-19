@@ -3,10 +3,10 @@ import { Plus_Jakarta_Sans, Geist_Mono } from "next/font/google";
 import Script from "next/script";
 import "./globals.css";
 import { ThemeProvider } from "@/components/theme-provider";
+import { AuthProvider } from "@/contexts/AuthContext";
 import { TelegramProvider } from "@/components/telegram-provider";
 import BottomNav from "@/components/bottom-nav";
 import SplashScreen from "@/components/splash-screen";
-import Providers from "./providers";
 
 const plusJakartaSans = Plus_Jakarta_Sans({
   variable: "--font-plus-jakarta-sans",
@@ -44,20 +44,20 @@ export default function RootLayout({
           runtime needs — it must exist before any application code reads it.
         */}
         <Script src="https://telegram.org/js/telegram-web-app.js" strategy="beforeInteractive" />
-        <Providers>
-          <TelegramProvider>
-            <ThemeProvider>
+        <ThemeProvider>
+          <AuthProvider>
+            <TelegramProvider>
               {/* Global App Load Splash Screen */}
               <SplashScreen />
 
               {/* Centered Mobile-only Device Mock Frame */}
-              <div className="w-full max-w-md min-h-screen bg-[var(--background)] flex flex-col shadow-2xl relative border-x border-brand-light-border dark:border-brand-dark-border pb-16">
+              <div className="w-full max-w-md min-h-screen bg-[var(--background)] flex flex-col shadow-2xl relative border-x border-brand-light-border dark:border-brand-dark-border">
                 {children}
                 <BottomNav />
               </div>
-            </ThemeProvider>
-          </TelegramProvider>
-        </Providers>
+            </TelegramProvider>
+          </AuthProvider>
+        </ThemeProvider>
       </body>
     </html>
   );
