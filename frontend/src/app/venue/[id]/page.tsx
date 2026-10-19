@@ -27,6 +27,7 @@ import {
   ChevronDown,
   MessageSquare,
   Send,
+  ImageOff,
 } from "lucide-react";
 import {
   venueService,
@@ -37,35 +38,29 @@ import {
   ReviewListItem,
   ReviewAggregateRead,
   MessageRead,
+  VenueWorkingHoursRead,
+  bookingService,
+  BazmlyApiError,
 } from "@/lib/api";
+import { formatAddress, formatMoney, formatRating, formatDiscount, nextDateForWeekday } from "@/lib/format";
 
 interface Props {
   params: Promise<{ id: string }>;
 }
 
-const DEFAULT_GALLERY = [
-  "/images/home/rest1.png",
-  "/images/home/rest2.png",
-  "/images/home/rest3.png",
-  "/images/home/rest4.png",
-  "/images/home/rest5.png",
-  "/images/home/rest6.png",
-];
+/** Times offered in the picker: whole hours this weekday's opening hours allow
+ * a two-hour table to fit into. Empty when the venue is closed that day. */
+function slotsFor(hours: VenueWorkingHoursRead[], weekday: number): string[] {
+  const day = hours.find((h) => h.weekday === weekday);
+  if (!day || day.is_closed || !day.opens_at || !day.closes_at) return [];
+  const open = Number(day.opens_at.slice(0, 2)) + (day.opens_at.slice(3, 5) === "00" ? 0 : 1);
+  const close = Number(day.closes_at.slice(0, 2));
+  const slots: string[] = [];
+  for (let hour = open; hour + 2 <= close; hour++) slots.push(`${String(hour).padStart(2, "0")}:00`);
+  return slots;
+}
 
-const DEFAULT_CATEGORIES = ["Barchasi", "Asosiy taomlar", "Kaboblar", "Fast food", "Ichimliklar"];
-
-const DEFAULT_FOODS = [
-  { id: 1, name: "Qozon kabob", category: "Asosiy taomlar", img: "/images/home/food2.png", price: "300 000 so'm", priceVal: 300000 },
-  { id: 2, name: "To'y Oshi (Maxsus)", category: "Asosiy taomlar", img: "/images/home/top.png", price: "80 000 so'm", priceVal: 80000 },
-  { id: 3, name: "Jizz (Go'shtli)", category: "Asosiy taomlar", img: "/images/home/food1.png", price: "500 000 so'm", priceVal: 500000 },
-  { id: 4, name: "Manti (Go'shtli)", category: "Asosiy taomlar", img: "/images/home/food3.png", price: "100 000 so'm", priceVal: 100000 },
-  { id: 5, name: "Stake T-Bone", category: "Asosiy taomlar", img: "/images/home/food4.png", price: "180 000 so'm", priceVal: 180000 },
-  { id: 6, name: "Tandir go'sht", category: "Asosiy taomlar", img: "/images/home/top.png", price: "250 000 so'm", priceVal: 250000 },
-  { id: 7, name: "Gijduvon shashlik", category: "Kaboblar", img: "/images/home/rest2.png", price: "35 000 so'm", priceVal: 35000 },
-  { id: 8, name: "Qiyma kabob", category: "Kaboblar", img: "/images/home/rest3.png", price: "28 000 so'm", priceVal: 28000 },
-  { id: 9, name: "Somsa tandir", category: "Fast food", img: "/images/home/tuyxona1.png", price: "15 000 so'm", priceVal: 15000 },
-  { id: 10, name: "Choynak choy (ko'k/qora)", category: "Ichimliklar", img: "/images/home/rest4.png", price: "12 000 so'm", priceVal: 12000 },
-];
+const PICKER_DAYS = ["Dush", "Sesh", "Chor", "Pay", "Jum", "Shan", "Yak"];
 
 export default function VenueDetailPage({ params }: Props) {
   const router = useRouter();
@@ -79,17 +74,25 @@ export default function VenueDetailPage({ params }: Props) {
   const [loading, setLoading] = useState(true);
   const [menuItems, setMenuItems] = useState<MenuItemListItem[]>([]);
   const [activeCategory, setActiveCategory] = useState("Barchasi");
-  const [activeImage, setActiveImage] = useState<string>("/images/home/top.png");
+  const [activeImage, setActiveImage] = useState<string>("");
   const [isSaved, setIsSaved] = useState(false);
   const [toastMessage, setToastMessage] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
-  const [selectedItems, setSelectedItems] = useState<Record<string, number>>({});
+  // Pre-order, keyed by menu item id.
+  const [selectedItems, setSelectedItems] = useState<Record<number, number>>({});
 
   // Interactive party/time picker state
   const [showPartySheet, setShowPartySheet] = useState(false);
   const [partySize, setPartySize] = useState(5);
-  const [selectedDay, setSelectedDay] = useState("Jum");
-  const [selectedTime, setSelectedTime] = useState("20:00");
+  // The next seven days, today first, as weekday labels the picker scrolls.
+  const [dayOptions] = useState(() => {
+    const today = (new Date().getDay() + 6) % 7;
+    return Array.from({ length: 7 }, (_, offset) => PICKER_DAYS[(today + offset) % 7]);
+  });
+  const [selectedDay, setSelectedDay] = useState(dayOptions[0]);
+  const [pickedTime, setPickedTime] = useState("");
+  const timeOptions = slotsFor(venueDetail?.working_hours ?? [], PICKER_DAYS.indexOf(selectedDay));
+  const selectedTime = timeOptions.includes(pickedTime) ? pickedTime : (timeOptions[0] ?? "");
 
   // Reviews state
   const [showReviews, setShowReviews] = useState(false);
@@ -101,7 +104,8 @@ export default function VenueDetailPage({ params }: Props) {
   // Real-time Chat States
   const [showChatModal, setShowChatModal] = useState(false);
   const [conversationId, setConversationId] = useState<number | null>(null);
-  const [chatMessages, setChatMessages] = useState<any[]>([]);
+  const [chatMessages, setChatMessages] = useState<MessageRead[]>([]);
+  const [chatError, setChatError] = useState<string | null>(null);
   const [newMessageText, setNewMessageText] = useState("");
   const [sendingMessage, setSendingMessage] = useState(false);
   const [loadingChat, setLoadingChat] = useState(false);
@@ -136,9 +140,8 @@ export default function VenueDetailPage({ params }: Props) {
   const handleDayScroll = (e: React.UIEvent<HTMLDivElement>) => {
     const el = e.currentTarget;
     const index = Math.round(el.scrollTop / 40);
-    const days = ["Chor", "Pay", "Jum", "Shan", "Yak"];
-    if (index >= 0 && index < days.length) {
-      setSelectedDay(days[index]);
+    if (index >= 0 && index < dayOptions.length) {
+      setSelectedDay(dayOptions[index]);
     }
   };
 
@@ -172,9 +175,8 @@ export default function VenueDetailPage({ params }: Props) {
   const handleTimeScroll = (e: React.UIEvent<HTMLDivElement>) => {
     const el = e.currentTarget;
     const index = Math.round(el.scrollTop / 40);
-    const times = ["18:00", "19:00", "20:00", "21:00", "22:00", "23:00"];
-    if (index >= 0 && index < times.length) {
-      setSelectedTime(times[index]);
+    if (index >= 0 && index < timeOptions.length) {
+      setPickedTime(timeOptions[index]);
     }
   };
 
@@ -182,14 +184,12 @@ export default function VenueDetailPage({ params }: Props) {
   useEffect(() => {
     if (showPartySheet) {
       setTimeout(() => {
-        const days = ["Chor", "Pay", "Jum", "Shan", "Yak"];
-        const dayIdx = days.indexOf(selectedDay);
+        const dayIdx = dayOptions.indexOf(selectedDay);
         if (dayIdx !== -1 && dayScrollRef.current) {
           dayScrollRef.current.scrollTop = dayIdx * 40;
         }
 
-        const times = ["18:00", "19:00", "20:00", "21:00", "22:00", "23:00"];
-        const timeIdx = times.indexOf(selectedTime);
+        const timeIdx = timeOptions.indexOf(selectedTime);
         if (timeIdx !== -1 && timeScrollRef.current) {
           timeScrollRef.current.scrollTop = timeIdx * 40;
         }
@@ -197,7 +197,7 @@ export default function VenueDetailPage({ params }: Props) {
     }
   }, [showPartySheet, selectedDay, selectedTime]);
 
-  // Load Real Venue Details, Zones, Menu, and Reviews from Backend
+  // Venue, menu and reviews — everything this screen shows comes from here.
   const loadVenueData = useCallback(async () => {
     setLoading(true);
     try {
@@ -212,17 +212,10 @@ export default function VenueDetailPage({ params }: Props) {
       setMenuItems(menu || []);
       setReviewsList(revs.items || []);
       setAggregate(agg);
-
-      if (detail?.photos && detail.photos.length > 0) {
-        setActiveImage(detail.photos[0].url);
-      } else {
-        const isToyxona =
-          detail?.venue.name.toLowerCase().includes("to'yxona") ||
-          detail?.venue.name.toLowerCase().includes("zali");
-        setActiveImage(isToyxona ? "/images/home/tuyxona1.png" : "/images/home/top.png");
-      }
+      setActiveImage(detail.photos[0]?.url ?? "");
     } catch (err) {
       console.warn("Venue detail fetch error:", err);
+      setVenueDetail(null);
     } finally {
       setLoading(false);
     }
@@ -230,12 +223,7 @@ export default function VenueDetailPage({ params }: Props) {
     if (isAuthenticated) {
       engagementService
         .getFavorites()
-        .then((favs) => {
-          const match = (favs || []).some(
-            (f) => ((f as any).venue_id || f.venue?.id) === Number(id)
-          );
-          setIsSaved(match);
-        })
+        .then((favs) => setIsSaved((favs || []).some((f) => f.venue.id === Number(id))))
         .catch(() => {});
     }
   }, [id, isAuthenticated]);
@@ -246,43 +234,19 @@ export default function VenueDetailPage({ params }: Props) {
 
   const handleOpenChat = async () => {
     setShowChatModal(true);
+    setChatError(null);
+    if (!isAuthenticated) {
+      setChatMessages([]);
+      setChatError("Xabar yozish uchun tizimga kiring");
+      return;
+    }
     setLoadingChat(true);
     try {
-      if (isAuthenticated) {
-        const conv = await engagementService.createConversation(Number(id)).catch(() => null);
-        if (conv?.id) {
-          setConversationId(conv.id);
-          const msgs = await engagementService.getMessages(conv.id).catch(() => []);
-          setChatMessages(msgs || []);
-        } else {
-          setChatMessages([
-            {
-              id: 1,
-              body: `Assalomu alaykum! ${venueDetail?.venue.name || "Muassasa"} ma'muriyatiga xush kelibsiz. Qanday savolingiz bor?`,
-              sender_user_id: 999,
-              sent_at: new Date().toISOString(),
-            },
-          ]);
-        }
-      } else {
-        setChatMessages([
-          {
-            id: 1,
-            body: `Assalomu alaykum! ${venueDetail?.venue.name || "Muassasa"} ma'muriyatiga xush kelibsiz. Qanday savolingiz bor?`,
-            sender_user_id: 999,
-            sent_at: new Date().toISOString(),
-          },
-        ]);
-      }
-    } catch {
-      setChatMessages([
-        {
-          id: 1,
-          body: `Assalomu alaykum! ${venueDetail?.venue.name || "Muassasa"} ma'muriyatiga xush kelibsiz. Qanday savolingiz bor?`,
-          sender_user_id: 999,
-          sent_at: new Date().toISOString(),
-        },
-      ]);
+      const conv = await engagementService.createConversation(Number(id));
+      setConversationId(conv.id);
+      setChatMessages(await engagementService.getMessages(conv.id));
+    } catch (err) {
+      setChatError(err instanceof BazmlyApiError ? err.message : "Suhbatni ochib bo'lmadi");
     } finally {
       setLoadingChat(false);
     }
@@ -290,54 +254,39 @@ export default function VenueDetailPage({ params }: Props) {
 
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newMessageText.trim()) return;
     const text = newMessageText.trim();
-    setNewMessageText("");
-
-    const myMsg = {
-      id: Date.now(),
-      body: text,
-      sender_user_id: user?.id || 1,
-      sent_at: new Date().toISOString(),
-    };
-    setChatMessages((prev) => [...prev, myMsg]);
-
-    if (conversationId) {
-      engagementService.sendMessage(conversationId, text).catch(() => {});
+    if (!text || !conversationId) return;
+    setSendingMessage(true);
+    try {
+      const sent = await engagementService.sendMessage(conversationId, text);
+      setChatMessages((prev) => [...prev, sent]);
+      setNewMessageText("");
+    } catch (err) {
+      setChatError(err instanceof BazmlyApiError ? err.message : "Xabar yuborilmadi");
+    } finally {
+      setSendingMessage(false);
     }
-
-    setTimeout(() => {
-      setChatMessages((prev) => [
-        ...prev,
-        {
-          id: Date.now() + 1,
-          body: "Xabaringiz qabul qilindi! Menejerimiz tez orada javob beradi.",
-          sender_user_id: 999,
-          sent_at: new Date().toISOString(),
-        },
-      ]);
-    }, 1200);
   };
 
-  // Cart total calculations
-  const handleAddItem = (name: string) => {
-    setSelectedItems((prev) => ({
-      ...prev,
-      [name]: (prev[name] || 0) + 1,
-    }));
+  const handleAddItem = (itemId: number) => {
+    setSelectedItems((prev) => ({ ...prev, [itemId]: (prev[itemId] || 0) + 1 }));
   };
 
-  const allFoodsList =
-    menuItems.length > 0
-      ? menuItems.map((m, idx) => ({
-          id: m.id,
-          name: m.name,
-          category: "Asosiy taomlar",
-          img: m.photo_url || DEFAULT_FOODS[idx % DEFAULT_FOODS.length].img,
-          price: `${Number(m.effective_price || 50000).toLocaleString()} ${m.currency || "so'm"}`,
-          priceVal: Number(m.effective_price || 50000),
-        }))
-      : DEFAULT_FOODS;
+  // A dish sold by portion has no price of its own; it is shown "from" its
+  // cheapest portion and pre-ordered at that price.
+  const allFoodsList = menuItems.map((m) => {
+    const price = m.effective_price ?? m.price_from;
+    const label = formatMoney(price, m.currency);
+    return {
+      id: m.id,
+      name: m.name,
+      category: m.category_name,
+      img: m.photo_url,
+      price: label ? (m.effective_price ? label : `${label} dan`) : "Narx ko'rsatilmagan",
+      priceVal: price ? Number(price) : 0,
+    };
+  });
+  const categories = ["Barchasi", ...Array.from(new Set(menuItems.map((m) => m.category_name)))];
 
   const filteredFoods = allFoodsList.filter((f) => {
     const matchCategory = activeCategory === "Barchasi" || f.category === activeCategory;
@@ -345,14 +294,10 @@ export default function VenueDetailPage({ params }: Props) {
     return matchCategory && matchSearch;
   });
 
-  const cartTotal = Object.entries(selectedItems).reduce((sum, [name, qty]) => {
-    const item = allFoodsList.find((f) => f.name === name);
+  const cartTotal = Object.entries(selectedItems).reduce((sum, [itemId, qty]) => {
+    const item = allFoodsList.find((f) => f.id === Number(itemId));
     return sum + (item ? item.priceVal * qty : 0);
   }, 0);
-
-  const formatPrice = (val: number) => {
-    return val.toString().replace(/\B(?=(\d{3})+(?!\d))/g, " ") + " so'm";
-  };
 
   // Toggle Save / Bookmark
   const handleSaveToggle = async () => {
@@ -364,9 +309,8 @@ export default function VenueDetailPage({ params }: Props) {
       const res = await engagementService.toggleFavorite(Number(id));
       setIsSaved(res.is_favorite);
       setToastMessage(res.is_favorite ? "Restoran saqlandi ❤️" : "Saqlanganlardan olib tashlandi");
-    } catch {
-      setIsSaved(!isSaved);
-      setToastMessage(!isSaved ? "Restoran saqlandi!" : "Saqlanganlardan olib tashlandi!");
+    } catch (err) {
+      setToastMessage(err instanceof BazmlyApiError ? err.message : "Saqlab bo'lmadi");
     }
   };
 
@@ -377,27 +321,35 @@ export default function VenueDetailPage({ params }: Props) {
     }
   };
 
+  // A review belongs to a completed visit: the server accepts one per
+  // completed booking, so the form looks for the guest's own unreviewed one.
   const handleSendReview = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newReviewText.trim()) return;
-
-    const fakeRev: ReviewListItem = {
-      id: Date.now(),
-      author: {
-        id: user?.id || 1,
-        first_name: user?.first_name || "Shahzod",
-        last_name: user?.last_name || "",
-        avatar_url: user?.avatar_url || "/images/home/rest6.png",
-      },
-      rating: newRating,
-      comment: newReviewText.trim(),
-      is_verified: true,
-      published_at: new Date().toISOString(),
-    };
-
-    setReviewsList([fakeRev, ...reviewsList]);
-    setNewReviewText("");
-    setToastMessage("Sharhingiz qabul qilindi!");
+    const comment = newReviewText.trim();
+    if (!comment) return;
+    if (!isAuthenticated) {
+      setToastMessage("Sharh qoldirish uchun tizimga kiring");
+      return;
+    }
+    try {
+      const mine = await bookingService.getMyBookings();
+      const visit = mine.find((b) => b.venue_id === Number(id) && b.status === "completed");
+      if (!visit) {
+        setToastMessage("Sharh faqat shu yerga tashrifingizdan keyin qoldiriladi");
+        return;
+      }
+      await venueService.createReview({ booking_id: visit.id, rating: newRating, comment });
+      setNewReviewText("");
+      setToastMessage("Sharhingiz qabul qilindi!");
+      const [revs, agg] = await Promise.all([
+        venueService.getReviews(id),
+        venueService.getReviewAggregate(id).catch(() => null),
+      ]);
+      setReviewsList(revs.items || []);
+      setAggregate(agg);
+    } catch (err) {
+      setToastMessage(err instanceof BazmlyApiError ? err.message : "Sharh yuborilmadi");
+    }
   };
 
   // Toast auto-dismiss helper
@@ -408,23 +360,14 @@ export default function VenueDetailPage({ params }: Props) {
     }
   }, [toastMessage]);
 
-  const venueName = venueDetail?.venue.name || "Muassasa";
-  const venueLocation = venueDetail?.venue.street
-    ? `${venueDetail.venue.street}, ${venueDetail.venue.house_number}`
-    : "Toshkent shahri";
-  const venueRating =
-    aggregate?.average && Number(aggregate.average) > 0
-      ? aggregate.average
-      : venueDetail?.venue.rating_avg && Number(venueDetail.venue.rating_avg) > 0
-      ? venueDetail.venue.rating_avg
-      : "4.8";
-  const reviewsCount =
-    aggregate?.count || venueDetail?.venue.reviews_count || reviewsList.length || 0;
-  const isDeposit = venueDetail?.venue.requires_deposit ?? false;
-  const gallery =
-    venueDetail?.photos && venueDetail.photos.length > 0
-      ? venueDetail.photos.map((p) => p.url)
-      : DEFAULT_GALLERY;
+  const venue = venueDetail?.venue;
+  const venueName = venue?.name ?? "";
+  const venueLocation = formatAddress(venue?.street, venue?.house_number);
+  const reviewsCount = aggregate?.count ?? venue?.reviews_count ?? 0;
+  const venueRating = formatRating(aggregate?.average ?? venue?.rating_avg, reviewsCount);
+  const discount = formatDiscount(venue?.discount_percent);
+  const isDeposit = venue?.requires_deposit ?? false;
+  const gallery = venueDetail?.photos.map((p) => p.url) ?? [];
 
   if (loading) {
     return (
@@ -517,6 +460,21 @@ export default function VenueDetailPage({ params }: Props) {
     );
   }
 
+  if (!venueDetail || !venue) {
+    return (
+      <div className="flex flex-col flex-1 min-h-screen items-center justify-center gap-4 px-6 text-center bg-[var(--background)]">
+        <p className={`text-sm font-bold ${isDark ? "text-white" : "text-zinc-900"}`}>Muassasa topilmadi</p>
+        <button
+          type="button"
+          onClick={() => router.push("/")}
+          className="px-5 py-2.5 rounded-xl bg-[#FF6B00] text-white text-xs font-bold cursor-pointer"
+        >
+          Bosh sahifaga qaytish
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div
       className={`flex flex-col flex-1 bg-[var(--background)] min-h-screen relative ${
@@ -533,11 +491,17 @@ export default function VenueDetailPage({ params }: Props) {
 
       {/* Cinematic Top Image Section */}
       <div className="relative w-full h-[280px] bg-zinc-900 border-b border-white/5 overflow-hidden">
-        <img
-          src={activeImage}
-          alt={venueName}
-          className="w-full h-full object-cover transition-transform duration-500"
-        />
+        {activeImage ? (
+          <img
+            src={activeImage}
+            alt={venueName}
+            className="w-full h-full object-cover transition-transform duration-500"
+          />
+        ) : (
+          <div className="w-full h-full flex items-center justify-center text-white/30">
+            <ImageOff className="h-10 w-10" />
+          </div>
+        )}
 
         <div className="absolute inset-0 bg-gradient-to-b from-black/50 via-transparent to-black/70 pointer-events-none" />
 
@@ -571,6 +535,7 @@ export default function VenueDetailPage({ params }: Props) {
         </div>
 
         {/* Bottom Small Image Gallery previews */}
+        {gallery.length > 1 && (
         <div className="absolute bottom-4 left-6 right-6 z-20 flex justify-center">
           <div className="bg-white/95 dark:bg-zinc-900/90 rounded-[18px] p-[5px] flex gap-[6px] items-center shadow-[0_8px_30px_rgba(0,0,0,0.16)] border border-white/40 dark:border-white/10 max-w-[340px] overflow-x-auto scrollbar-none backdrop-blur-md">
             {gallery.map((thumb, idx) => {
@@ -594,6 +559,7 @@ export default function VenueDetailPage({ params }: Props) {
             })}
           </div>
         </div>
+        )}
       </div>
 
       {/* Main Details Body */}
@@ -601,10 +567,14 @@ export default function VenueDetailPage({ params }: Props) {
         {/* Info detail block */}
         <div className="space-y-4">
           <div className="flex items-center justify-between gap-4">
-            <div className="flex items-center gap-1.5 bg-green-500/10 border border-green-500/20 text-[#10B981] font-bold rounded-lg px-2.5 py-1 text-xs">
-              <Percent className="h-3.5 w-3.5" />
-              <span>10% maxsus chegirma</span>
-            </div>
+            {discount ? (
+              <div className="flex items-center gap-1.5 bg-green-500/10 border border-green-500/20 text-[#10B981] font-bold rounded-lg px-2.5 py-1 text-xs">
+                <Percent className="h-3.5 w-3.5" />
+                <span>{discount}</span>
+              </div>
+            ) : (
+              <span />
+            )}
 
             {/* Rating row link */}
             <button
@@ -615,9 +585,7 @@ export default function VenueDetailPage({ params }: Props) {
               }`}
             >
               <Star className="h-3.5 w-3.5 fill-[#FFB800] text-[#FFB800]" />
-              <span>
-                {venueRating} ({reviewsCount} ta sharh)
-              </span>
+              <span>{venueRating ? `${venueRating} (${reviewsCount} ta sharh)` : "Hali sharh yo'q"}</span>
               <ChevronRight className="h-4 w-4 text-[#FFB800]" />
             </button>
           </div>
@@ -632,9 +600,13 @@ export default function VenueDetailPage({ params }: Props) {
                 <p className="text-xs text-zinc-400 mt-0.5">{venueDetail.venue.tagline}</p>
               )}
             </div>
-            <div className="flex items-center gap-1.5 text-xs text-[#10B981] font-bold pt-2">
-              <span className="w-1.5 h-1.5 rounded-full bg-[#10B981]" />
-              <span>{venueDetail?.is_open_now ? "Ochiq" : "Faol"}</span>
+            <div
+              className={`flex items-center gap-1.5 text-xs font-bold pt-2 ${
+                venueDetail.is_open_now ? "text-[#10B981]" : "text-zinc-400"
+              }`}
+            >
+              <span className={`w-1.5 h-1.5 rounded-full ${venueDetail.is_open_now ? "bg-[#10B981]" : "bg-zinc-400"}`} />
+              <span>{venueDetail.is_open_now ? "Ochiq" : "Yopiq"}</span>
             </div>
           </div>
 
@@ -646,7 +618,7 @@ export default function VenueDetailPage({ params }: Props) {
               }`}
             >
               <Users className="h-4 w-4 text-[#FF6B00]" />
-              <span>Sig'imi: {venueDetail?.venue.total_seats ? `${venueDetail.venue.total_seats} ta o'rin` : "120 o'rin"}</span>
+              <span>{venue.total_seats ? `Sig'imi: ${venue.total_seats} ta o'rin` : "Sig'imi ko'rsatilmagan"}</span>
             </div>
 
             {/* Deposit Badges */}
@@ -667,7 +639,7 @@ export default function VenueDetailPage({ params }: Props) {
             }`}
           >
             <MapPin className={`h-4 w-4 shrink-0 ${isDark ? "text-white/30" : "text-zinc-400"}`} />
-            <span>{venueLocation}</span>
+            <span>{venueLocation ?? "Manzil ko'rsatilmagan"}</span>
           </div>
 
           {/* Quick Contact & Chat Buttons */}
@@ -745,7 +717,7 @@ export default function VenueDetailPage({ params }: Props) {
 
           {/* Categories Horizontal Pills */}
           <div className="flex items-center gap-2 overflow-x-auto scrollbar-none pb-1">
-            {DEFAULT_CATEGORIES.map((cat) => {
+            {categories.map((cat) => {
               const isActive = activeCategory === cat;
               return (
                 <button
@@ -768,11 +740,16 @@ export default function VenueDetailPage({ params }: Props) {
 
           {/* Food Grid Display */}
           <div className="grid grid-cols-2 gap-4 pt-1">
-            {filteredFoods.map((food, idx) => {
-              const qty = selectedItems[food.name] || 0;
+            {filteredFoods.length === 0 && (
+              <p className="col-span-2 py-8 text-center text-xs text-zinc-400">
+                {menuItems.length === 0 ? "Bu muassasa hali menyu qo'shmagan" : "Hech narsa topilmadi"}
+              </p>
+            )}
+            {filteredFoods.map((food) => {
+              const qty = selectedItems[food.id] || 0;
               return (
                 <div
-                  key={idx}
+                  key={food.id}
                   className={`border rounded-3xl p-3 flex flex-col gap-3 relative text-left animate-fade-in ${
                     isDark
                       ? "bg-[#393939] border-white/5 shadow-lg"
@@ -784,11 +761,13 @@ export default function VenueDetailPage({ params }: Props) {
                       isDark ? "border-white/5 bg-zinc-800" : "border-zinc-100 bg-zinc-50"
                     }`}
                   >
-                    <img
-                      src={food.img}
-                      alt={food.name}
-                      className="w-full h-full object-cover"
-                    />
+                    {food.img ? (
+                      <img src={food.img} alt={food.name} className="w-full h-full object-cover" />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center text-zinc-300">
+                        <ImageOff className="h-6 w-6" />
+                      </div>
+                    )}
 
                     {qty > 0 ? (
                       <div className="absolute bottom-2 right-2 bg-white border border-zinc-200 text-black rounded-full px-2 py-1 flex items-center gap-2 shadow-md z-10 animate-scale-up">
@@ -797,8 +776,8 @@ export default function VenueDetailPage({ params }: Props) {
                           onClick={() => {
                             setSelectedItems((prev) => {
                               const next = { ...prev };
-                              if (next[food.name] > 1) next[food.name]--;
-                              else delete next[food.name];
+                              if (next[food.id] > 1) next[food.id]--;
+                              else delete next[food.id];
                               return next;
                             });
                           }}
@@ -811,7 +790,7 @@ export default function VenueDetailPage({ params }: Props) {
                         </span>
                         <button
                           type="button"
-                          onClick={() => handleAddItem(food.name)}
+                          onClick={() => handleAddItem(food.id)}
                           className="w-5 h-5 flex items-center justify-center font-black text-xs text-zinc-500 hover:text-black cursor-pointer active:scale-80 transition-all"
                         >
                           <Plus className="h-3 w-3 stroke-[3]" />
@@ -820,7 +799,7 @@ export default function VenueDetailPage({ params }: Props) {
                     ) : (
                       <button
                         type="button"
-                        onClick={() => handleAddItem(food.name)}
+                        onClick={() => handleAddItem(food.id)}
                         className={`absolute bottom-2 right-2 w-8 h-8 rounded-full shadow-md flex items-center justify-center font-bold hover:scale-105 active:scale-95 transition-all z-10 ${
                           isDark
                             ? "bg-[#FF6B00] text-white"
@@ -857,7 +836,7 @@ export default function VenueDetailPage({ params }: Props) {
           onClick={() => setShowPartySheet(true)}
           className="w-full py-4 rounded-[24px] bg-[#FF5A00] hover:bg-[#E05000] text-white font-extrabold text-sm tracking-wide flex items-center justify-center gap-2 transition-all active:scale-98 shadow-lg shadow-[#FF6B00]/25 cursor-pointer"
         >
-          <span>{cartTotal > 0 ? `${formatPrice(cartTotal)} • Bron qilish` : "Bron qilish"}</span>
+          <span>{cartTotal > 0 ? `${formatMoney(cartTotal)} • Bron qilish` : "Bron qilish"}</span>
         </button>
       </div>
 
@@ -899,13 +878,16 @@ export default function VenueDetailPage({ params }: Props) {
               }`}
             >
               <div>
-                <span className="text-3xl font-black text-[#FFB800]">{venueRating}</span>
+                <span className="text-3xl font-black text-[#FFB800]">{venueRating ?? "—"}</span>
                 <span className="text-xs text-zinc-400 block mt-0.5">5.0 ballik shkalada</span>
               </div>
               <div className="text-right">
                 <div className="flex items-center gap-0.5 text-[#FFB800] justify-end">
                   {Array.from({ length: 5 }).map((_, i) => (
-                    <Star key={i} className="h-4 w-4 fill-[#FFB800] text-[#FFB800]" />
+                    <Star
+                      key={i}
+                      className={`h-4 w-4 text-[#FFB800] ${i < Math.round(Number(venueRating ?? 0)) ? "fill-[#FFB800]" : ""}`}
+                    />
                   ))}
                 </div>
                 <span className="text-xs font-bold text-zinc-400 block mt-0.5">
@@ -933,11 +915,13 @@ export default function VenueDetailPage({ params }: Props) {
                           isDark ? "border-white/10 bg-zinc-800" : "border-zinc-200 bg-zinc-50"
                         }`}
                       >
-                        <img
-                          src={rev.author.avatar_url || "/images/home/rest1.png"}
-                          className="w-full h-full object-cover"
-                          alt={rev.author.first_name}
-                        />
+                        {rev.author.avatar_url ? (
+                          <img src={rev.author.avatar_url} className="w-full h-full object-cover" alt={rev.author.first_name} />
+                        ) : (
+                          <span className="w-full h-full flex items-center justify-center text-xs font-bold text-zinc-400">
+                            {rev.author.first_name.charAt(0)}
+                          </span>
+                        )}
                       </div>
                       <div>
                         <div className="flex items-center gap-1.5">
@@ -981,6 +965,19 @@ export default function VenueDetailPage({ params }: Props) {
                   : "bg-zinc-100 border-transparent focus-within:bg-zinc-200/50"
               }`}
             >
+              <div className="flex items-center shrink-0">
+                {[1, 2, 3, 4, 5].map((n) => (
+                  <button
+                    key={n}
+                    type="button"
+                    onClick={() => setNewRating(n)}
+                    aria-label={`${n} baho`}
+                    className="p-0.5 cursor-pointer"
+                  >
+                    <Star className={`h-4 w-4 text-[#FFB800] ${n <= newRating ? "fill-[#FFB800]" : ""}`} />
+                  </button>
+                ))}
+              </div>
               <input
                 type="text"
                 value={newReviewText}
@@ -1083,7 +1080,7 @@ export default function VenueDetailPage({ params }: Props) {
                   style={{ paddingTop: "40px", paddingBottom: "40px" }}
                   className="h-full overflow-y-auto scrollbar-none flex flex-col snap-y snap-mandatory cursor-grab active:cursor-grabbing text-center z-10"
                 >
-                  {["Chor", "Pay", "Jum", "Shan", "Yak"].map((day) => {
+                  {dayOptions.map((day) => {
                     const isActive = selectedDay === day;
                     return (
                       <div
@@ -1113,7 +1110,12 @@ export default function VenueDetailPage({ params }: Props) {
                   style={{ paddingTop: "40px", paddingBottom: "40px" }}
                   className="h-full overflow-y-auto scrollbar-none flex flex-col snap-y snap-mandatory cursor-grab active:cursor-grabbing text-center z-10"
                 >
-                  {["18:00", "19:00", "20:00", "21:00", "22:00", "23:00"].map((time) => {
+                  {timeOptions.length === 0 && (
+                    <div style={{ height: "40px", lineHeight: "40px" }} className="text-xs font-bold text-zinc-400">
+                      Dam olish kuni
+                    </div>
+                  )}
+                  {timeOptions.map((time) => {
                     const isActive = selectedTime === time;
                     return (
                       <div
@@ -1140,7 +1142,7 @@ export default function VenueDetailPage({ params }: Props) {
                 setShowPartySheet(false);
                 const itemsQuery = encodeURIComponent(JSON.stringify(selectedItems));
                 router.push(
-                  `/booking/${id}?total=${cartTotal}&guests=${partySize}&date=${selectedDay}&time=${selectedTime}&items=${itemsQuery}`
+                  `/booking/${id}?guests=${partySize}&date=${nextDateForWeekday(selectedDay)}&time=${selectedTime}&items=${itemsQuery}`
                 );
               }}
               className="w-full py-4.5 bg-[#FF5A00] hover:bg-[#E05000] text-white font-extrabold text-sm rounded-[24px] shadow-lg shadow-[#FF5A00]/20 hover:scale-[1.01] active:scale-[0.99] transition-all duration-200 cursor-pointer"
@@ -1164,16 +1166,13 @@ export default function VenueDetailPage({ params }: Props) {
             <div className="px-5 py-4 border-b border-zinc-100 dark:border-white/5 flex items-center justify-between bg-zinc-50/50 dark:bg-white/[0.02]">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 rounded-full border border-primary/30 overflow-hidden bg-zinc-100">
-                  <img src={activeImage} alt={venueName} className="w-full h-full object-cover" />
+                  {gallery[0] && <img src={gallery[0]} alt={venueName} className="w-full h-full object-cover" />}
                 </div>
                 <div>
                   <h4 className="font-extrabold text-sm leading-tight text-foreground dark:text-white">
                     {venueName}
                   </h4>
-                  <div className="flex items-center gap-1.5 text-[10px] text-emerald-500 font-bold">
-                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                    <span>Ma'muriyat onlayn</span>
-                  </div>
+                  <div className="text-[10px] text-zinc-400 font-bold">Ma&apos;muriyat bilan yozishma</div>
                 </div>
               </div>
               <button
@@ -1192,13 +1191,15 @@ export default function VenueDetailPage({ params }: Props) {
                   <Loader2 className="h-5 w-5 animate-spin text-primary" />
                   <span>Xabarlar yuklanmoqda...</span>
                 </div>
+              ) : chatError ? (
+                <div className="text-center py-10 text-xs text-red-500 font-semibold">{chatError}</div>
               ) : chatMessages.length === 0 ? (
                 <div className="text-center py-10 text-xs text-zinc-400">
                   Muloqotni boshlash uchun savolingizni yozing.
                 </div>
               ) : (
                 chatMessages.map((msg) => {
-                  const isMine = msg.sender_user_id === (user?.id || 1);
+                  const isMine = msg.sender_user_id === user?.id;
                   return (
                     <div
                       key={msg.id}
@@ -1219,7 +1220,7 @@ export default function VenueDetailPage({ params }: Props) {
                             isMine ? "text-white" : "text-zinc-400"
                           }`}
                         >
-                          {new Date(msg.sent_at || Date.now()).toLocaleTimeString([], {
+                          {new Date(msg.created_at).toLocaleTimeString([], {
                             hour: "2-digit",
                             minute: "2-digit",
                           })}
@@ -1247,7 +1248,7 @@ export default function VenueDetailPage({ params }: Props) {
               />
               <button
                 type="submit"
-                disabled={!newMessageText.trim()}
+                disabled={!newMessageText.trim() || !conversationId || sendingMessage}
                 className="w-11 h-11 rounded-2xl bg-primary hover:bg-[#E05000] text-white flex items-center justify-center transition-all disabled:opacity-40 disabled:scale-100 active:scale-95 cursor-pointer shadow-md shadow-primary/20"
               >
                 <Send className="w-4 h-4" />

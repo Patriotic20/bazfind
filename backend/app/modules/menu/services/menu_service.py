@@ -63,9 +63,13 @@ class MenuService:
         return [
             MenuItemListItem(
                 id=row.item.id,
+                menu_category_id=row.item.menu_category_id,
+                category_name=row.category_name,
                 name=row.name,
+                description=row.description,
                 photo_url=row.item.photo_url,
                 effective_price=row.effective_price,
+                price_from=row.price_from,
                 currency=row.item.currency,
                 discount_percent=row.item.discount_percent,
                 has_variants=row.item.has_variants,

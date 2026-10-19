@@ -528,9 +528,13 @@ export interface MenuItemVariantCreate {
 
 export interface MenuItemListItem {
   id: number;
+  menu_category_id: number;
+  category_name: string;
   name: string;
+  description: string | null;
   photo_url: string | null;
   effective_price: string | null;
+  price_from: string | null;
   currency: string;
   discount_percent: string | null;
   has_variants: boolean;
