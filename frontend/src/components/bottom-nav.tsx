@@ -6,6 +6,10 @@ import { usePathname } from "next/navigation";
 import { X, ChevronLeft, CheckCircle, Aperture, AlertCircle } from "lucide-react";
 
 import { useTheme } from "@/components/theme-provider";
+import { QRCodeSVG } from "qrcode.react";
+import { useAuth } from "@/contexts/AuthContext";
+import { bookingService, BookingOwnerDetail } from "@/lib/api";
+import { formatDate, formatTime } from "@/lib/format";
 
 export default function BottomNav() {
   const pathname = usePathname();
@@ -58,6 +62,36 @@ export default function BottomNav() {
     };
   }, [pathname, isHiddenRoute, mounted]);
 
+  const { isAuthenticated } = useAuth();
+  // "My QR" is the guest's next active booking — the token a venue scans.
+  const [myTicket, setMyTicket] = useState<BookingOwnerDetail | null>(null);
+  const [myTicketState, setMyTicketState] = useState<"idle" | "loading" | "none" | "signed-out">("idle");
+
+  const showMyQr = async () => {
+    setScanState("my_qr");
+    if (!isAuthenticated) {
+      setMyTicketState("signed-out");
+      return;
+    }
+    setMyTicketState("loading");
+    try {
+      const today = new Date().toISOString().slice(0, 10);
+      const next = (await bookingService.getMyBookings())
+        .filter((b) => (b.status === "pending" || b.status === "confirmed") && b.booking_date >= today)
+        .sort((a, b) => (a.booking_date + a.start_time).localeCompare(b.booking_date + b.start_time))[0];
+      if (!next) {
+        setMyTicket(null);
+        setMyTicketState("none");
+        return;
+      }
+      setMyTicket(await bookingService.getBookingDetail(next.id));
+      setMyTicketState("idle");
+    } catch {
+      setMyTicket(null);
+      setMyTicketState("none");
+    }
+  };
+
   const [isScanning, setIsScanning] = useState(false);
   const [scanResult, setScanResult] = useState<string | null>(null);
   const [loadingScan, setLoadingScan] = useState(false);
@@ -73,12 +107,8 @@ export default function BottomNav() {
     setScanResult(null);
     setLoadingScan(true);
     setScanState("permission"); // Always start with permission check screen
-
-    // Simulate scanning/decoding delay of 2.8 seconds
-    setTimeout(() => {
-      setLoadingScan(false);
-      setScanResult("BZ-90214"); // Simulated valid ticket ID
-    }, 2800);
+    // No decoder is wired to the camera yet, so nothing is "recognised" here.
+    setLoadingScan(false);
   };
 
   // Camera stream activation and release effect
@@ -416,62 +446,30 @@ export default function BottomNav() {
                   isDark ? "bg-[#2C2C2E] border-white/10 text-white" : "bg-white border-zinc-200 text-zinc-900 shadow-[0_15px_40px_rgba(0,0,0,0.06)]"
                 }`}>
                   
-                  {/* Detailed SVG QR Code */}
-                  <div className="p-2 bg-white rounded-2xl border border-zinc-100 shadow-sm">
-                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" className="h-44 w-44 text-black">
-                      {/* Top-left position marker */}
-                      <rect x="0" y="0" width="28" height="28" fill="currentColor" rx="4" />
-                      <rect x="4" y="4" width="20" height="20" fill="white" rx="2" />
-                      <rect x="8" y="8" width="12" height="12" fill="currentColor" rx="1" />
-
-                      {/* Top-right position marker */}
-                      <rect x="72" y="0" width="28" height="28" fill="currentColor" rx="4" />
-                      <rect x="76" y="4" width="20" height="20" fill="white" rx="2" />
-                      <rect x="80" y="8" width="12" height="12" fill="currentColor" rx="1" />
-
-                      {/* Bottom-left position marker */}
-                      <rect x="0" y="72" width="28" height="28" fill="currentColor" rx="4" />
-                      <rect x="4" y="76" width="20" height="20" fill="white" rx="2" />
-                      <rect x="8" y="80" width="12" height="12" fill="currentColor" rx="1" />
-
-                      {/* Mock QR bits */}
-                      <rect x="36" y="0" width="8" height="8" fill="currentColor" rx="1" />
-                      <rect x="52" y="0" width="12" height="4" fill="currentColor" rx="1" />
-                      <rect x="60" y="4" width="4" height="8" fill="currentColor" rx="1" />
-                      
-                      <rect x="36" y="12" width="4" height="12" fill="currentColor" rx="1" />
-                      <rect x="48" y="16" width="8" height="8" fill="currentColor" rx="1" />
-                      <rect x="60" y="16" width="4" height="4" fill="currentColor" rx="1" />
-                      
-                      <rect x="36" y="28" width="16" height="4" fill="currentColor" rx="1" />
-                      <rect x="56" y="24" width="8" height="8" fill="currentColor" rx="1" />
-                      <rect x="84" y="32" width="8" height="8" fill="currentColor" rx="1" />
-                      
-                      <rect x="12" y="36" width="16" height="8" fill="currentColor" rx="1" />
-                      <rect x="0" y="48" width="8" height="16" fill="currentColor" rx="1" />
-                      <rect x="36" y="44" width="8" height="12" fill="currentColor" rx="1" />
-                      <rect x="48" y="40" width="12" height="4" fill="currentColor" rx="1" />
-                      <rect x="52" y="48" width="16" height="16" fill="currentColor" rx="1" />
-                      
-                      <rect x="76" y="48" width="8" height="8" fill="currentColor" rx="1" />
-                      <rect x="88" y="56" width="12" height="4" fill="currentColor" rx="1" />
-                      <rect x="72" y="68" width="8" height="16" fill="currentColor" rx="1" />
-                      <rect x="88" y="72" width="8" height="8" fill="currentColor" rx="1" />
-                      <rect x="84" y="84" width="16" height="16" fill="currentColor" rx="2" />
-                      
-                      <rect x="20" y="60" width="4" height="4" fill="currentColor" rx="0.5" />
-                      <rect x="36" y="68" width="12" height="4" fill="currentColor" rx="0.5" />
-                      <rect x="44" y="76" width="4" height="12" fill="currentColor" rx="0.5" />
-                      <rect x="60" y="76" width="8" height="4" fill="currentColor" rx="0.5" />
-                    </svg>
-                  </div>
-
-                  {/* Caption Text */}
-                  <p className={`text-[13px] font-bold tracking-tight px-4 leading-normal select-none ${
-                    isDark ? "text-white/90" : "text-zinc-800"
-                  }`}>
-                    Ushbu QR kodni sotuvchiga ko'rsating
-                  </p>
+                  {myTicketState === "loading" ? (
+                    <p className="text-xs font-semibold text-zinc-400 py-10">Yuklanmoqda...</p>
+                  ) : myTicket ? (
+                    <>
+                      <div className="p-3 bg-white rounded-2xl border border-zinc-100 shadow-sm">
+                        <QRCodeSVG value={myTicket.qr_token} size={176} />
+                      </div>
+                      <div className="space-y-1">
+                        <p className="text-sm font-black">{myTicket.venue_name}</p>
+                        <p className="text-xs text-zinc-400 font-semibold">
+                          {formatDate(myTicket.booking.booking_date)} • {formatTime(myTicket.booking.start_time)}
+                        </p>
+                        <p className={`text-[13px] font-bold tracking-tight px-4 leading-normal ${isDark ? "text-white/90" : "text-zinc-800"}`}>
+                          Ushbu QR kodni muassasa xodimiga ko&apos;rsating
+                        </p>
+                      </div>
+                    </>
+                  ) : (
+                    <p className="text-sm font-bold py-10 px-2">
+                      {myTicketState === "signed-out"
+                        ? "QR chipta uchun tizimga kiring"
+                        : "Sizda faol bron yo'q — bron qilganingizda QR chipta shu yerda chiqadi"}
+                    </p>
+                  )}
                 </div>
               </div>
             ) : (
@@ -560,7 +558,7 @@ export default function BottomNav() {
               <div className="flex flex-col items-center justify-center animate-fade-in">
                 {/* Custom QR code active scan badge */}
                 <div 
-                  onClick={() => setScanState("my_qr")}
+                  onClick={showMyQr}
                   className="w-14 h-14 bg-[#FF5A00] hover:bg-[#E05000] rounded-2xl flex items-center justify-center shadow-[0_6px_20px_rgba(255,90,0,0.35)] cursor-pointer transform active:scale-95 transition-all mb-2"
                 >
                   <svg className="w-6 h-6 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
