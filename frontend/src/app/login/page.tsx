@@ -44,6 +44,7 @@ import {
   engagementService,
   RegionRead,
   DistrictRead,
+  NotificationRead,
 } from "@/lib/api";
 
 type Step =
@@ -83,21 +84,29 @@ const LANGUAGES: Language[] = [
 const FAQS = [
   {
     q: "Qanday qilib restoran yoki marosim zalini bron qilish mumkin?",
-    a: "Loyiha bosh sahifasidagi 'Joylar' bo'limiga o'ting, o'zingizga yoqqan restoran yoki zalni tanlang. Sana, vaqt va stol raqamini belgilab, to'lovni tasdiqlang. Broningiz muvaffaqiyatli amalga oshgach, u 'Tarix' bo'limida faol holatda ko'rinadi."
+    a: "Bosh sahifadan restoran yoki to'yxonani tanlang, sana, vaqt va mehmonlar sonini belgilang. Bron muassasaga so'rov sifatida boradi; muassasa tasdiqlagach, chiptangiz 'Mening bronlarim' bo'limida faollashadi."
   },
   {
-    q: "To'lovlar xavfsizmi va qanday amalga oshiriladi?",
-    a: "Barcha to'lovlar hamkor rasmiy to'lov tizimlari orqali 3D-Secure himoyasi bilan amalga oshiriladi. Humo yoki Uzcard bank kartangizni kiritib, SMS-kod orqali tasdiqlash yo'li bilan mutlaqo xavfsiz to'lov qilishingiz mumkin."
+    q: "To'lov qanday amalga oshiriladi?",
+    a: "Ilova orqali onlayn to'lov hozircha yo'q — to'lov muassasaning o'zida amalga oshiriladi. Ba'zi to'yxonalar depozit talab qiladi; uning miqdori bron oynasida ko'rsatiladi."
   },
   {
     q: "Buyurtmani bekor qilsam, pulim qaytariladimi?",
-    a: "Ha, albatta. Agar tadbiringiz boshlanishiga 48 soatdan ko'proq vaqt qolgan bo'lsa, buyurtmani bekor qilishingiz mumkin va mablag'ingiz kartangizga 100% qaytarib beriladi. 48 soatdan kam vaqt qolganda esa bekor qilish imkoniyati mavjud emas."
+    a: "Bronni 'Mening bronlarim' bo'limidan bekor qilishingiz mumkin. Depozit to'langan bo'lsa va tadbirga 24 soatdan kam qolgan bo'lsa, depozit qaytarilmaydi."
   },
   {
     q: "Promo-kodlar va kuponlardan qanday foydalanaman?",
-    a: "Mavjud kuponlarni 'Voucher' bo'limida ko'rishingiz mumkin. Buyurtmani rasmiylashtirish va to'lov sahifasida promo-kod kiritish oynasiga kupon kodini kiritsangiz, chegirma avtomatik ravishda buyurtma summasiga qo'llaniladi."
+    a: "Promokodlar hozircha mavjud emas. Muassasalarning o'z chegirmalari esa ularning sahifasida ko'rsatiladi."
   }
 ];
+
+/** `"09:00 - 23:00"` as two `HH:MM` strings; null when it is not that shape. */
+function parseHours(value: string): { opens: string; closes: string } | null {
+  const match = value.match(/^\s*(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})\s*$/);
+  if (!match) return null;
+  const pad = (h: string) => h.padStart(2, "0");
+  return { opens: `${pad(match[1])}:${match[2]}`, closes: `${pad(match[3])}:${match[4]}` };
+}
 
 export default function LoginPage() {
   const router = useRouter();
@@ -120,7 +129,9 @@ export default function LoginPage() {
   };
   const [mounted, setMounted] = useState(false);
   const [isRegistered, setIsRegistered] = useState(false);
-  const [step, setStep] = useState<Step>(1);
+  // Step 1 was an interface-language picker; the interface has one language
+  // and the server no longer stores a choice, so the wizard starts at 2.
+  const [step, setStep] = useState<Step>(2);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   
@@ -140,6 +151,8 @@ export default function LoginPage() {
   const [venueName, setVenueName] = useState("");
   const [venueType, setVenueType] = useState<"restaurant" | "toyxona">("restaurant");
   const [venueHours, setVenueHours] = useState("09:00 - 23:00");
+  const [partnerStreet, setPartnerStreet] = useState("");
+  const [partnerHouse, setPartnerHouse] = useState("");
   const [venueCapacity, setVenueCapacity] = useState("");
   const [venuePrice, setVenuePrice] = useState("");
   const [venueImages, setVenueImages] = useState<string[]>([]);
@@ -224,16 +237,20 @@ export default function LoginPage() {
   
   const handleCustomerFinalRegister = async () => {
     setError("");
-    if (!fullName.trim()) {
-      setError("Ismingizni kiriting!");
+    const nameParts = fullName.trim().split(/\s+/);
+    if (nameParts.length < 2) {
+      setError("Ism va familiyangizni kiriting!");
+      return;
+    }
+    if (password.trim().length < 8) {
+      setError("Parol kamida 8 belgidan iborat bo'lsin!");
       return;
     }
 
     setLoading(true);
     try {
-      const nameParts = fullName.trim().split(/\s+/);
-      const firstName = nameParts[0] || "Foydalanuvchi";
-      const lastName = nameParts.slice(1).join(" ") || "Mijoz";
+      const firstName = nameParts[0];
+      const lastName = nameParts.slice(1).join(" ");
       let formattedPhone = phone.trim().replace(/\D/g, "");
       if (!formattedPhone.startsWith("998")) {
         formattedPhone = "998" + formattedPhone;
@@ -244,7 +261,7 @@ export default function LoginPage() {
         phone: formattedPhone,
         first_name: firstName,
         last_name: lastName,
-        password: password.trim() || undefined,
+        password: password.trim(),
       });
 
       setIsRegistered(true);
@@ -276,18 +293,15 @@ export default function LoginPage() {
     try {
       const result = await checkPhone(formattedPhone);
       if (result.registered) {
-        if (result.password_required) {
-          showToast("Ushbu raqam allaqachon ro'yxatdan o'tgan. Iltimos parolingiz bilan kiring.");
-          setUsername(phone);
-          setStep("login");
-        } else {
-          setStep("register_customer_phone_otp");
-        }
+        showToast("Bu raqam ro'yxatdan o'tgan — parolingiz bilan kiring.");
+        setUsername(phone);
+        setStep("login");
       } else {
-        setStep("register_customer_phone_otp");
+        // There is no SMS step behind the API, so none is pretended here.
+        setStep("register_customer_name");
       }
-    } catch {
-      setStep("register_customer_phone_otp");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Raqamni tekshirib bo'lmadi");
     } finally {
       setLoading(false);
     }
@@ -564,6 +578,11 @@ export default function LoginPage() {
   };
 
   const [activeModal, setActiveModal] = useState<string | null>(null);
+  const [notifications, setNotifications] = useState<NotificationRead[] | null>(null);
+  // Owning a chain does not change users.role on the server, so the panel link
+  // follows the chain itself rather than the role.
+  const [ownsChain, setOwnsChain] = useState(false);
+  const [notificationsError, setNotificationsError] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState("");
 
   // Mount effect to check registration state
@@ -582,14 +601,17 @@ export default function LoginPage() {
         user.role === "staff";
       setRole(isPrivileged ? "partner" : "customer");
     } else {
-      const registered = localStorage.getItem("isRegistered") === "true";
-      if (registered) {
-        setIsRegistered(true);
-        setFullName(localStorage.getItem("fullName") || "Foydalanuvchi");
-        setLocation(localStorage.getItem("location") || "Tashkent, Tashkent city");
-        setPhone(localStorage.getItem("phone") || "");
-      }
+      // Only a signed-in account has a profile to show.
+      setIsRegistered(false);
     }
+  }, [user]);
+
+  useEffect(() => {
+    if (!user) return;
+    partnerService
+      .getMyGroup()
+      .then(() => setOwnsChain(true))
+      .catch(() => setOwnsChain(false));
   }, [user]);
 
   useEffect(() => {
@@ -662,9 +684,12 @@ export default function LoginPage() {
       return;
     }
     const nameParts = editName.trim().split(/\s+/);
-    const firstName = nameParts[0] || "Foydalanuvchi";
-    const lastName = nameParts.slice(1).join(" ") || "";
-    const cleanLocation = editLocation.trim() || "Tashkent, Tashkent city";
+    if (nameParts.length < 2) {
+      showToast("Ism va familiyangizni kiriting!");
+      return;
+    }
+    const firstName = nameParts[0];
+    const lastName = nameParts.slice(1).join(" ");
     setLoading(true);
     try {
       await updateProfile({
@@ -673,7 +698,6 @@ export default function LoginPage() {
       });
       showToast("Profil muvaffaqiyatli saqlandi!");
       setFullName(editName);
-      setLocation(cleanLocation);
       setPhone(editPhone);
       setIsEditing(false);
     } catch (err: any) {
@@ -690,7 +714,7 @@ export default function LoginPage() {
       setIsRegistered(false);
       setFullName("");
       setPhone("");
-      setStep(1);
+      setStep(2);
       setActiveModal(null);
       showToast("Akkaunt muvaffaqiyatli o'chirildi.");
     } catch (err: any) {
@@ -707,7 +731,7 @@ export default function LoginPage() {
     setIsRegistered(false);
     setFullName("");
     setPhone("");
-    setStep(1);
+    setStep(2);
     setActiveModal(null);
     showToast("Akkauntdan chiqildi.");
   };
@@ -728,14 +752,18 @@ export default function LoginPage() {
         setError("Joyingiz nomini kiriting!");
         return;
       }
-      if (!reg || !dist) {
+      if (!reg || !dist || !selectedPartnerDistrictId) {
         setError("Viloyat va tumanni belgilang!");
+        return;
+      }
+      if (!partnerStreet.trim() || !partnerHouse.trim()) {
+        setError("Ko'cha va uy raqamini kiriting!");
         return;
       }
       setStep("partner_hours");
     } else if (step === "partner_hours") {
-      if (!venueHours.trim()) {
-        setError("Ish tartibini kiriting!");
+      if (!parseHours(venueHours)) {
+        setError("Ish vaqtini \"09:00 - 23:00\" ko'rinishida kiriting!");
         return;
       }
       setStep(4);
@@ -750,36 +778,32 @@ export default function LoginPage() {
         setError("Narxni kiriting!");
         return;
       }
-      setStep(5);
-    } else if (step === 5) {
-      if (venueImages.length === 0) {
-        setError("Kamida bitta rasm tanlang!");
-        return;
-      }
+      // Photos have no upload endpoint yet, so the gallery step is skipped
+      // rather than collecting pictures that would never be saved.
       setStep(6);
     } else if (step === 6) {
+      if (fullName.trim().split(/\s+/).length < 2) {
+        setError("Ism va familiyangizni kiriting!");
+        return;
+      }
       if (phone.length < 9) {
         setError("Telefon raqamini to'liq kiriting!");
         return;
       }
       setStep("partner_password");
     } else if (step === "partner_password") {
-      if (!password.trim()) {
-        setError("Parol kiriting!");
+      if (password.trim().length < 8) {
+        setError("Parol kamida 8 belgidan iborat bo'lsin!");
         return;
       }
-      setLoading(true);
-      setTimeout(() => {
-        setLoading(false);
-        setStep(7);
-      }, 1000);
+      handleCompletePartnerRegistration();
     }
   };
 
   const handleBackStep = () => {
     setError("");
     if (step === 2) {
-      setStep(1);
+      setStep(2);
     } else if (step === "login" || step === "register_customer") {
       setStep(2);
     } else if (step === "register_customer_phone_otp") {
@@ -787,7 +811,7 @@ export default function LoginPage() {
     } else if (step === "register_customer_email_otp") {
       setStep("register_customer_phone_otp");
     } else if (step === "register_customer_name") {
-      setStep("register_customer_email_otp");
+      setStep("register_customer");
     } else if (step === 3) {
       setStep(2);
     } else if (step === "partner_address") {
@@ -805,7 +829,7 @@ export default function LoginPage() {
     } else if (step === 5) {
       setStep("partner_price");
     } else if (step === 6) {
-      setStep(5);
+      setStep("partner_price");
     } else if (step === "partner_password") {
       setStep(6);
     } else if (step === 7) {
@@ -843,21 +867,6 @@ export default function LoginPage() {
       return;
     }
 
-    // 1. Admin bypass check first to avoid any unnecessary failing network calls
-    if (username.trim() === "admin" && password.trim() === "admin") {
-      localStorage.setItem("fullName", "Admin Hamkor");
-      localStorage.setItem("phone", "+998991234567");
-      localStorage.setItem("location", "Tashkent, Tashkent city");
-      localStorage.setItem("userRole", "partner");
-      localStorage.setItem("isRegistered", "true");
-      setIsRegistered(true);
-      setRole("partner");
-      setFullName("Admin Hamkor");
-      showToast("Tizimga muvaffaqiyatli kirdingiz!");
-      router.push("/admin");
-      return;
-    }
-
     setLoading(true);
     try {
       const digitsOnly = username.trim().replace(/\D/g, "");
@@ -876,7 +885,8 @@ export default function LoginPage() {
         showToast("Tizimga muvaffaqiyatli kirdingiz!");
         setIsRegistered(true);
         const me = await userService.getMe().catch(() => null);
-        if (me && (me.role === "partner" || me.role === "admin" || me.role === "staff")) {
+        const ownsGroup = await partnerService.getMyGroup().then(() => true, () => false);
+        if (ownsGroup || (me && (me.role === "venue_owner" || me.role === "venue_staff"))) {
           router.push("/admin");
         } else {
           router.push("/feed");
@@ -909,120 +919,97 @@ export default function LoginPage() {
     setStep(6);
   };
 
-  const handleOtpConfirm = async () => {
+  /**
+   * The account, the chain and its first branch, in that order — each step
+   * stops on the server's refusal instead of carrying on as if it worked.
+   */
+  const handleCompletePartnerRegistration = async () => {
     setError("");
-    if (otp.some((v) => !v)) {
-      setError("6 xonali kodni to'liq kiriting!");
+    const district = partnerDistricts.find((d) => d.id === selectedPartnerDistrictId);
+    const hours = parseHours(venueHours);
+    if (!district || !hours) {
+      setError("Manzil yoki ish vaqti to'liq emas — orqaga qaytib tekshiring.");
       return;
     }
+    let formattedPhone = phone.trim().replace(/\D/g, "");
+    if (!formattedPhone.startsWith("998")) formattedPhone = "998" + formattedPhone;
+    formattedPhone = "+" + formattedPhone;
+    const [firstName, ...rest] = fullName.trim().split(/\s+/);
+    const venueKind = accountType === "toyxona" ? "toyxona" : "restoran";
+    const size = Number(venueCapacity) || null;
+    const price = Number(venuePrice.replace(/\D/g, "")) || null;
 
     setLoading(true);
     try {
-      let formattedPhone = phone.trim().replace(/\D/g, "");
-      if (!formattedPhone.startsWith("998")) formattedPhone = "998" + formattedPhone;
-      formattedPhone = "+" + formattedPhone;
-
-      if (accountType === "customer") {
-        try {
-          await register({
-            phone: formattedPhone,
-            password: password.trim() || "Password123!",
-            first_name: fullName.trim() || "Foydalanuvchi",
-            last_name: "",
-          });
-        } catch (apiErr: any) {
-          console.warn("Register API notice:", apiErr);
-        }
-
-        setIsRegistered(true);
-        setRole("customer");
-        setFullName(fullName);
-        setPhone(formattedPhone);
-        showToast("Muvaffaqiyatli ro'yxatdan o'tdingiz!");
-        router.push("/feed");
-      } else {
-        setStep(8);
-      }
-    } catch (err: any) {
-      setError(err?.message || "Ro'yxatdan o'tishda xatolik yuz berdi");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleCompletePartnerRegistration = async () => {
-    setLoading(true);
-    try {
-      let formattedPhone = phone.trim().replace(/\D/g, "");
-      if (!formattedPhone.startsWith("998")) formattedPhone = "998" + formattedPhone;
-      formattedPhone = "+" + formattedPhone;
-
-      try {
-        await register({
-          phone: formattedPhone,
-          password: password.trim() || "Partner123!",
-          first_name: venueName.trim(),
-          last_name: "Hamkor",
-        });
-      } catch (err) {
-        console.warn("Partner register fallback:", err);
-      }
-
-      try {
-        await partnerService.createVenue({
+      await register({ phone: formattedPhone, password: password.trim(), first_name: firstName, last_name: rest.join(" ") });
+      const created = await partnerService.createGroupWithBranch({
+        group: { name: venueName.trim(), primary_venue_type: venueKind },
+        branch: {
           name: venueName.trim(),
-          venue_type: accountType === "restaurant" ? "restoran" : "toyxona",
-          street: reg || "Toshkent",
-          house_number: dist || "Markaz",
-          district_id: selectedPartnerDistrictId || 1,
-          latitude: 41.2995,
-          longitude: 69.2401,
+          venue_type: venueKind,
+          district_id: district.id,
+          street: partnerStreet.trim(),
+          house_number: partnerHouse.trim(),
+          // The district's own point until there is a map picker.
+          latitude: Number(district.latitude),
+          longitude: Number(district.longitude),
           phone: formattedPhone,
-        });
-      } catch {}
-
+          base_price: price,
+          ...(venueKind === "toyxona" ? { capacity_max: size } : { total_seats: size }),
+        },
+      });
+      const venueId = created.branches[0].id;
+      await partnerService.updateWorkingHours(venueId, {
+        days: Array.from({ length: 7 }, (_, weekday) => ({
+          weekday,
+          opens_at: `${hours.opens}:00`,
+          closes_at: `${hours.closes}:00`,
+          is_closed: false,
+        })),
+      });
+      await partnerService.updateVenue(venueId, { status: "active" });
       setIsRegistered(true);
       setRole("partner");
-      setFullName(venueName.trim());
-      setPhone(formattedPhone);
-
-      showToast("Ro'yxatdan muvaffaqiyatli o'tdingiz!");
-      router.push("/admin");
-    } catch {
-      router.push("/admin");
+      setStep(8);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Ro'yxatdan o'tishda xatolik yuz berdi");
     } finally {
       setLoading(false);
     }
   };
 
+  const openNotifications = () => {
+    setShowMessages(true);
+    setNotifications(null);
+    setNotificationsError(null);
+    engagementService
+      .getNotifications(50, 0)
+      .then((page) => setNotifications(page.items))
+      .catch((err) => setNotificationsError(err instanceof Error ? err.message : "Xabarlarni yuklab bo'lmadi"));
+  };
+
+  // Cards, interface languages and a booking "history" had no data behind
+  // them; history is the tickets page, the other two are gone.
+  const isPartnerAccount = ownsChain || user?.role === "venue_owner" || user?.role === "venue_staff";
   const menuItems = [
-    {
-      label: "Admin / Hamkor paneli",
-      icon: Store,
-      action: () => router.push("/admin"),
-    },
+    ...(isPartnerAccount
+      ? [
+          {
+            label: "Hamkor paneli",
+            icon: Store,
+            action: () => router.push("/admin"),
+          },
+        ]
+      : []),
     {
       label: "Xabarlar",
       icon: Bell,
-      action: () => setShowMessages(true),
+      action: openNotifications,
     },
     {
-      label: "Mening kartalarim",
-      icon: Wallet,
-      action: () => setShowCards(true),
-    },
-    {
-      label: "Tarix",
+      label: "Mening bronlarim",
       icon: Clock,
-      action: () => setShowHistory(true),
-    },
-    {
-      label: "Tillar",
-      icon: Languages,
-      action: () => {
-        setTempLanguage(selectedLang || "uz");
-        setShowLanguages(true);
-      },
+      action: () => router.push("/tickets"),
     },
     {
       label: "Yordam",
@@ -1059,460 +1046,7 @@ export default function LoginPage() {
       {isRegistered ? (
         /* ==================== REGISTERED PROFILE VIEW ==================== */
         <div className={`flex flex-col flex-1 bg-[var(--background)] ${isDark ? "text-white" : "text-zinc-900"} transition-all duration-300 ${isBottomNavHidden ? "-mb-16" : ""}`}>
-          {showCards ? (
-            /* ==================== HIGH-FIDELITY REGISTERED MY CARDS VIEW ==================== */
-            <div className={`flex flex-col flex-1 bg-[var(--background)] ${isDark ? "text-white" : "text-zinc-900"}`}>
-              <style>{`
-                @keyframes slideUp {
-                  from { transform: translateY(100%); }
-                  to { transform: translateY(0); }
-                }
-                .animate-slide-up {
-                  animation: slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-                }
-              `}</style>
-
-              {showCardOtp ? (
-                /* ==================== SCREEN 4: OTP VERIFICATION VIEW ==================== */
-                <div className={`flex flex-col flex-1 bg-[var(--background)] ${isDark ? "text-white" : "text-zinc-900"}`}>
-                  {/* Close Top Bar */}
-                  <div className="relative flex items-center justify-between px-6 py-5">
-                    <button
-                      onClick={() => setShowCardOtp(false)}
-                      className={`p-2 rounded-xl transition-all active:scale-95 ${
-                        isDark 
-                          ? "bg-white/5 text-white/80 hover:bg-white/10 hover:text-white" 
-                          : "bg-transparent text-zinc-950 hover:text-zinc-700"
-                      }`}
-                    >
-                      <X className="h-6 w-6" />
-                    </button>
-                    <div className="w-9 h-9" />
-                  </div>
-
-                  {/* Verification Form Content */}
-                  <main className="flex-1 px-6 py-4 flex flex-col justify-between max-w-md mx-auto w-full">
-                    <div className="space-y-4">
-                      <h1 className={`text-3xl font-bold tracking-tight ${isDark ? "text-white" : "text-black"}`}>Send verification code</h1>
-                      <p className={`text-base leading-relaxed ${isDark ? "text-white/60" : "text-zinc-800"}`}>
-                        We'll send a code to your phone number to verify your card
-                      </p>
-
-                      {/* 6 OTP Code Slots */}
-                      <div className="flex gap-2 justify-center py-4">
-                        {[0, 1, 2, 3, 4, 5].map((idx) => (
-                          <div
-                            key={idx}
-                            className={`w-11 h-14 rounded-xl border flex items-center justify-center text-lg font-bold transition-all duration-200 ${
-                              isDark 
-                                ? "bg-[#393939] border-white/10" 
-                                : "bg-white border-zinc-200 text-black"
-                            } ${
-                              cardOtp[idx] 
-                                ? "border-[#FF5A00] text-[#FF5A00]" 
-                                : ""
-                            }`}
-                          >
-                            {cardOtp[idx] || ""}
-                          </div>
-                        ))}
-                      </div>
-
-                      {/* Resend Code Link */}
-                      <div className="text-center">
-                        <button
-                          type="button"
-                          onClick={() => showToast("Kod qayta yuborildi!")}
-                          className="text-xs font-bold text-[#FF5A00] hover:text-primary-hover transition-colors"
-                        >
-                          Resent code
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Bottom Next Button & Keypad */}
-                    <div className="space-y-6 pb-2">
-                      <button
-                        type="button"
-                        disabled={cardOtp.some(digit => digit === "")}
-                        onClick={() => {
-                          const firstDigit = newCardNumber.charAt(0);
-                          const cardType = firstDigit === "8" ? "uzcard" : "humo";
-                          const masked = `**** **** **** ${newCardNumber.replace(/\s/g, "").slice(-4)}`;
-                          
-                          setUserCards((prev) => [
-                            ...prev,
-                            {
-                              id: Date.now().toString(),
-                              type: cardType,
-                              number: masked,
-                              name: fullName || "Alisher Raimov"
-                            }
-                          ]);
-                          
-                          // Reset & Success
-                          showToast("Karta muvaffaqiyatli qo'shildi!");
-                          setShowCardOtp(false);
-                          setShowAddCard(false);
-                          setNewCardNumber("");
-                          setNewCardExpiry("");
-                          setCardOtp(["", "", "", "", "", ""]);
-                        }}
-                        className={`w-full py-4 rounded-3xl font-bold text-sm tracking-wide transition-all active:scale-98 shadow-lg ${
-                          cardOtp.some(digit => digit !== "")
-                            ? "bg-[#FF5A00] text-white shadow-[#FF5A00]/25 cursor-pointer"
-                            : isDark
-                              ? "bg-primary/20 text-white/30 cursor-not-allowed"
-                              : "bg-[#FF5A00]/20 text-white cursor-not-allowed"
-                        }`}
-                      >
-                        Next
-                      </button>
-
-                      {/* Custom Simulated Numeric Keypad matching screenshot 4 */}
-                      <div className={`grid grid-cols-3 gap-y-3 gap-x-4 px-4 py-4 rounded-t-3xl ${
-                        isDark ? "bg-[#2C2C2E]/50" : "bg-[#D1D3D9]/60 backdrop-blur-md"
-                      }`}>
-                        {[
-                          { val: "1", sub: "" },
-                          { val: "2", sub: "abc" },
-                          { val: "3", sub: "def" },
-                          { val: "4", sub: "ghi" },
-                          { val: "5", sub: "jkl" },
-                          { val: "6", sub: "mno" },
-                          { val: "7", sub: "pqrs" },
-                          { val: "8", sub: "tuv" },
-                          { val: "9", sub: "wxyz" },
-                          { val: "+*#", sub: "" },
-                          { val: "0", sub: "" },
-                          { val: "⌫", sub: "" }
-                        ].map((btn, index) => {
-                          const isSpecial = btn.val === "+*#" || btn.val === "⌫";
-                          return (
-                            <button
-                              key={index}
-                              type="button"
-                              onClick={() => handleKeypadPress(btn.val)}
-                              className={`rounded-lg py-2.5 flex flex-col items-center justify-center transition-all duration-100 ${
-                                isDark
-                                  ? "bg-[#2C2C2E] hover:bg-[#3A3A3C] active:bg-[#48484A]"
-                                  : isSpecial
-                                    ? "bg-transparent text-black hover:bg-zinc-200 active:bg-zinc-300"
-                                    : "bg-white text-black shadow-[0_1px_1px_rgba(0,0,0,0.18)] hover:bg-zinc-50 active:bg-zinc-150"
-                              }`}
-                            >
-                              <span className={`text-xl font-bold leading-tight ${isDark ? "text-white" : "text-black"}`}>{btn.val}</span>
-                              {btn.sub && <span className={`text-[9px] font-medium uppercase tracking-widest leading-none ${
-                                isDark ? "text-white/40" : "text-zinc-500"
-                              }`}>{btn.sub}</span>}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  </main>
-                </div>
-              ) : showAddCard ? (
-                /* ==================== SCREEN 2 & 3: ADD CARD DETAILS VIEW ==================== */
-                <div className={`flex flex-col flex-1 bg-[var(--background)] ${isDark ? "text-white" : "text-zinc-900"}`}>
-                  {/* Top Bar Header */}
-                  <div className={`relative flex items-center justify-between px-6 py-5 ${
-                    isDark ? "border-b border-white/5" : ""
-                  }`}>
-                    <button
-                      onClick={() => setShowAddCard(false)}
-                      className={`p-2 rounded-xl transition-all active:scale-95 ${
-                        isDark 
-                          ? "bg-white/5 text-white/80 hover:bg-white/10 hover:text-white" 
-                          : "bg-transparent text-zinc-950 hover:text-zinc-700"
-                      }`}
-                    >
-                      <ChevronLeft className="h-6 w-6" />
-                    </button>
-                    <h1 className={`text-lg font-semibold tracking-wide ${isDark ? "text-white" : "text-zinc-950"}`}>Karta ma‘lumotlari</h1>
-                    <div className="w-9 h-9" />
-                  </div>
-
-                  {/* Form Content */}
-                  <main className="flex-1 px-6 py-8 flex flex-col justify-between max-w-md mx-auto w-full">
-                    <div className="space-y-6">
-                      {/* Card Number field with internal custom orange icon */}
-                      <div className="space-y-2">
-                        <div className={`relative flex items-center rounded-2xl border overflow-hidden transition-all duration-300 ${
-                          isDark 
-                            ? "bg-[#393939] border-white/5 focus-within:border-primary/50" 
-                            : "bg-zinc-100 border-transparent focus-within:bg-zinc-200"
-                        }`}>
-                          <span className="pl-4 shrink-0 flex items-center justify-center">
-                            <svg className="h-5 w-5 text-[#FF5A00]" viewBox="0 0 24 24" fill="currentColor">
-                              <rect x="2" y="5" width="20" height="14" rx="3" />
-                              <line x1="2" y1="10" x2="22" y2="10" stroke="white" strokeWidth="2" />
-                              <rect x="5" y="14" width="3" height="2" fill="white" />
-                            </svg>
-                          </span>
-                          <input
-                            type="text"
-                            value={newCardNumber}
-                            onChange={handleCardNumberChange}
-                            placeholder="Karta raqami"
-                            className={`w-full pl-3 pr-4 py-4 bg-transparent text-sm font-semibold tracking-wider outline-none ${
-                              isDark ? "text-white placeholder:text-white/30" : "text-zinc-900 placeholder:text-zinc-400"
-                            }`}
-                          />
-                        </div>
-                      </div>
-
-                      {/* Expiry field */}
-                      <div className="space-y-2">
-                        <div className={`relative flex items-center rounded-2xl border overflow-hidden w-36 transition-all duration-300 ${
-                          isDark 
-                            ? "bg-[#393939] border-white/5 focus-within:border-primary/50" 
-                            : "bg-zinc-100 border-transparent focus-within:bg-zinc-200"
-                        }`}>
-                          <input
-                            type="text"
-                            value={newCardExpiry}
-                            onChange={handleCardExpiryChange}
-                            placeholder="OO/YY"
-                            className={`w-full px-4 py-4 bg-transparent text-sm font-semibold tracking-wider outline-none ${
-                              isDark ? "text-white placeholder:text-white/30" : "text-zinc-900 placeholder:text-zinc-400"
-                            }`}
-                          />
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Bottom Submit Button */}
-                    <div className="pb-8">
-                      <button
-                        type="button"
-                        disabled={newCardNumber.length < 19 || newCardExpiry.length < 5}
-                        onClick={() => {
-                          setCardOtp(["", "", "", "", "", ""]);
-                          setShowCardOtp(true);
-                        }}
-                        className={`w-full py-4 rounded-3xl font-bold text-sm tracking-wide transition-all active:scale-98 shadow-lg ${
-                          newCardNumber.length === 19 && newCardExpiry.length === 5
-                            ? "bg-[#FF5A00] text-white shadow-[#FF5A00]/20 hover:bg-[#E05000] cursor-pointer"
-                            : isDark
-                              ? "bg-[#E25C00]/10 text-white/20 cursor-not-allowed"
-                              : "bg-[#FF5A00]/20 text-white cursor-not-allowed"
-                        }`}
-                      >
-                        Tasdiqlash
-                      </button>
-                    </div>
-                  </main>
-                </div>
-              ) : (
-                /* ==================== SCREEN 1: CARDS LIST VIEW ==================== */
-                <div className={`flex flex-col flex-1 bg-[var(--background)] ${isDark ? "text-white" : "text-zinc-900"}`}>
-                  {/* Top Bar Header */}
-                  <div className={`relative flex items-center justify-between px-6 py-5 ${
-                    isDark ? "border-b border-white/5" : ""
-                  }`}>
-                    <button
-                      onClick={() => setShowCards(false)}
-                      className={`p-2 rounded-xl transition-all active:scale-95 ${
-                        isDark 
-                          ? "bg-white/5 text-white/80 hover:bg-white/10 hover:text-white" 
-                          : "bg-transparent text-zinc-950 hover:text-zinc-700"
-                      }`}
-                    >
-                      <ChevronLeft className="h-6 w-6" />
-                    </button>
-                    <h1 className={`text-lg font-semibold tracking-wide ${isDark ? "text-white" : "text-zinc-950"}`}>Sozlamalar</h1>
-                    <div className="w-9 h-9" />
-                  </div>
-
-                  {/* Content Container */}
-                  <main className="flex-1 overflow-y-auto px-6 py-8 pb-10 flex flex-col gap-6 max-w-md mx-auto w-full">
-                    {/* Render existing cards */}
-                    {userCards.map((card) => (
-                      <div
-                        key={card.id}
-                        onClick={() => setSelectedCardForDelete(card)}
-                        className={`w-full border rounded-[24px] p-6 flex flex-col justify-between h-44 relative overflow-hidden transition-all duration-300 cursor-pointer active:scale-98 ${
-                          isDark
-                            ? "border-white/15 bg-[#393939] hover:border-primary/55 shadow-2xl"
-                            : "border-slate-300 bg-white hover:border-slate-400 shadow-sm"
-                        }`}
-                      >
-                        <div className="flex justify-between items-start">
-                          {card.type === "humo" ? (
-                            <img
-                              src="/images/humo.png"
-                              alt="Humo Card"
-                              className="h-9 object-contain rounded"
-                            />
-                          ) : (
-                            <div className="flex items-center gap-2 text-primary font-black uppercase text-sm tracking-widest">
-                              <CreditCard className={`h-7 w-7 ${isDark ? "text-white" : "text-zinc-900"}`} />
-                              <span className={isDark ? "text-white" : "text-zinc-900"}>Uzcard</span>
-                            </div>
-                          )}
-                        </div>
-                        <p className={`text-[15px] font-semibold tracking-wide capitalize ${
-                          isDark ? "text-white/90" : "text-black"
-                        }`}>
-                          {card.name || fullName}
-                        </p>
-                        <p className={`text-[15px] font-semibold tracking-widest ${
-                          isDark ? "text-white/90" : "text-black"
-                        }`}>
-                          {card.number}
-                        </p>
-                      </div>
-                    ))}
-
-                    {/* Card 2: Empty Card with Add Button */}
-                    <div className={`w-full border rounded-[24px] p-6 flex flex-col justify-between h-44 transition-all duration-300 ${
-                      isDark
-                        ? "border-white/10 bg-[#393939]/20 hover:bg-[#393939]/30"
-                        : "border-primary bg-white hover:border-primary/80"
-                    }`}>
-                      <div className={`flex justify-between items-start ${isDark ? "text-white/60" : "text-primary"}`}>
-                        <CreditCard className="h-7 w-7" />
-                      </div>
-                      <div className="flex justify-start">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setNewCardNumber("");
-                            setNewCardExpiry("");
-                            setShowAddCard(true);
-                          }}
-                          className="flex items-center gap-2.5 px-6 py-3 rounded-full bg-[#FF5A00] hover:bg-[#E05000] text-white text-sm font-bold shadow-lg shadow-primary/20 transition-all active:scale-95 cursor-pointer"
-                        >
-                          <span className="flex items-center justify-center w-5 h-5 rounded-full bg-white text-[#FF5A00] text-xs font-black">+</span>
-                          <span>Karta qo'shish</span>
-                        </button>
-                      </div>
-                    </div>
-                  </main>
-
-                  {/* Card Deletion Bottom Drawer (Sheet) matching Screenshot 1 */}
-                  {selectedCardForDelete && (
-                    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-end justify-center transition-opacity duration-300 animate-fade-in">
-                      <div className="absolute inset-0" onClick={() => setSelectedCardForDelete(null)} />
-                      
-                      <div className={`w-full max-w-md rounded-t-[32px] px-6 pt-3 pb-8 flex flex-col items-center gap-4 z-10 animate-slide-up border-t relative ${
-                        isDark ? "bg-[#393939] border-white/5" : "bg-white border-zinc-200"
-                      }`}>
-                        {/* Notch indicator */}
-                        <div className={`w-12 h-1 rounded-full mb-2 ${isDark ? "bg-white/20" : "bg-zinc-200"}`} />
-                        
-                        {/* Title */}
-                        <p className={`text-base font-bold tracking-wide ${isDark ? "text-white" : "text-zinc-900"}`}>Bank kartasi</p>
-                        
-                        {/* Delete Button */}
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const idToDelete = selectedCardForDelete.id;
-                            setUserCards((prev) => prev.filter((c) => c.id !== idToDelete));
-                            setSelectedCardForDelete(null);
-                            showToast("Karta muvaffaqiyatli o'chirildi!");
-                          }}
-                          className="w-full py-4 rounded-2xl bg-[#E82C2C] hover:bg-red-700 text-white font-bold text-sm tracking-wide flex items-center justify-center gap-2 transition-all active:scale-98 shadow-lg shadow-red-600/10"
-                        >
-                          <Trash2 className="h-4.5 w-4.5" />
-                          <span>Kartani olib tashlash</span>
-                        </button>
-                        
-                        {/* Cancel Button */}
-                        <button
-                          type="button"
-                          onClick={() => setSelectedCardForDelete(null)}
-                          className={`w-full py-4 font-bold text-sm tracking-wide transition-all active:scale-98 ${
-                            isDark ? "text-white/60 hover:text-white" : "text-zinc-500 hover:text-zinc-800"
-                          }`}
-                        >
-                          Ortga
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          ) : showLanguages ? (
-            /* ==================== HIGH-FIDELITY REGISTERED LANGUAGE SETTINGS VIEW ==================== */
-            <div className={`flex flex-col flex-1 bg-[var(--background)] ${isDark ? "text-white" : "text-zinc-900"}`}>
-              {/* Top Bar Header */}
-              <div className="relative flex items-center justify-between px-6 py-5">
-                <button
-                  onClick={() => setShowLanguages(false)}
-                  className={`p-2 rounded-xl transition-all active:scale-95 ${
-                    isDark ? "bg-white/5 text-white/80 hover:bg-white/10 hover:text-white" : "bg-zinc-100 text-zinc-700 hover:bg-zinc-200"
-                  }`}
-                >
-                  <ChevronLeft className="h-5 w-5" />
-                </button>
-                <h1 className={`text-base font-bold tracking-wide ${isDark ? "text-white" : "text-zinc-900"}`}>Til sozlamalari</h1>
-                <div className="w-9 h-9" />
-              </div>
-
-              {/* Form Content */}
-              <main className="flex-1 px-6 py-6 flex flex-col justify-between max-w-md mx-auto w-full">
-                <div className="space-y-6">
-                  {/* Subtitle */}
-                  <div className="space-y-1 text-left">
-                    <h2 className={`text-xl font-bold tracking-tight leading-tight ${isDark ? "text-white" : "text-zinc-900"}`}>Ilovani o'zingizga qulay</h2>
-                    <p className={`text-xl font-bold tracking-tight leading-tight ${isDark ? "text-white/95" : "text-zinc-800"}`}>tilda boshqaring</p>
-                  </div>
-
-                  {/* Language Options Grid */}
-                  <div className="space-y-4">
-                    {[
-                      { code: "uz", label: "O'zbek tili", icon: "/icons/uzb.png" },
-                      { code: "en", label: "Ingliz tili", icon: "/icons/eng.png" },
-                      { code: "ru", label: "Rus tili", icon: "/icons/ru.png" }
-                    ].map((opt) => {
-                      const isSelected = tempLanguage === opt.code;
-                      return (
-                        <button
-                          key={opt.code}
-                          type="button"
-                          onClick={() => setTempLanguage(opt.code)}
-                          className={`w-full flex items-center justify-between p-5 rounded-[20px] transition-all duration-200 active:scale-98 text-left ${
-                            isSelected
-                              ? "bg-primary text-white shadow-lg shadow-primary/20"
-                              : isDark ? "bg-[#393939] text-white hover:bg-zinc-800" : "bg-zinc-100 text-zinc-900 hover:bg-zinc-200"
-                          }`}
-                        >
-                          <div className="flex items-center gap-4">
-                            <img
-                              src={opt.icon}
-                              alt={opt.label}
-                              className="w-10 h-10 object-cover rounded-full shadow-sm"
-                            />
-                            <span className="text-base font-bold tracking-wide">{opt.label}</span>
-                          </div>
-                          {isSelected && <Check className="h-5 w-5 text-white" />}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                {/* Bottom Confirm Button */}
-                <div className="pb-8">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSelectedLang(tempLanguage);
-                      setShowLanguages(false);
-                      showToast("Til muvaffaqiyatli o'zgartirildi!");
-                    }}
-                    className="w-full py-4 rounded-2xl bg-primary hover:bg-primary-hover text-white font-bold text-sm tracking-wide transition-all active:scale-98 shadow-lg shadow-primary/20"
-                  >
-                    Tasdiqlash
-                  </button>
-                </div>
-              </main>
-            </div>
-          ) : showMessages ? (
+          {showMessages ? (
             /* ==================== HIGH-FIDELITY REGISTERED XABARLAR VIEW ==================== */
             <div className={`flex flex-col flex-1 bg-[var(--background)] ${isDark ? "text-white" : "text-zinc-900"} animate-fade-in`}>
               {/* Top Bar Header */}
@@ -1537,266 +1071,44 @@ export default function LoginPage() {
                   <p className={`text-xl font-bold tracking-tight leading-tight ${isDark ? "text-white/95" : "text-zinc-800"}`}>kuzatib boring</p>
                 </div>
 
-                {/* Notifications Grouped List */}
-                <div className="space-y-6">
-                  {/* Group 1: Today */}
-                  <div className="space-y-3.5">
-                    <h3 className={`text-base font-bold tracking-wide ${isDark ? "text-white" : "text-zinc-800"}`}>Today</h3>
-                    
-                    {/* Unread Card (warm brown tint, unread red dot) */}
-                    <div className={`w-full border rounded-3xl p-5 flex items-start gap-4 relative shadow-lg ${
-                      isDark ? "bg-[#221A15] border-white/5" : "bg-orange-50/50 border-orange-100"
-                    }`}>
-                      {/* Red unread dot */}
-                      <span className="absolute top-3.5 right-3.5 w-2 h-2 rounded-full bg-[#E53E3E]" />
-                      
-                      {/* Stylized Logo circular container */}
-                      <div className="w-12 h-12 rounded-full bg-primary flex items-center justify-center shrink-0 shadow-md">
-                        <img
-                          src="/logo-loading.png"
-                          alt="B"
-                          className="w-7 h-7 object-contain"
-                        />
-                      </div>
-                      
-                      {/* Content text */}
-                      <div className="space-y-1 pr-2">
-                        <h4 className={`text-sm font-bold leading-snug ${isDark ? "text-white" : "text-zinc-900"}`}>
-                          Bazmly just got better! 🚀
-                        </h4>
-                        <p className={`text-xs leading-normal ${isDark ? "text-white/80" : "text-zinc-650"}`}>
-                          Check out our latest update now
-                        </p>
-                        <p className={`text-[10px] font-semibold pt-1 ${isDark ? "text-white/45" : "text-zinc-400"}`}>
-                          20.01.2026, 18:00
-                        </p>
-                      </div>
-                    </div>
+                {notificationsError ? (
+                  <p className="text-xs font-bold text-red-500">{notificationsError}</p>
+                ) : notifications === null ? (
+                  <div className="flex justify-center py-10">
+                    <Loader2 className="h-6 w-6 animate-spin text-primary" />
                   </div>
-
-                  <hr className={`border-t my-1 ${isDark ? "border-white/5" : "border-zinc-200"}`} />
-
-                  {/* Group 2: This Week */}
+                ) : notifications.length === 0 ? (
+                  <p className={`text-sm text-center py-10 ${isDark ? "text-white/50" : "text-zinc-500"}`}>Hozircha xabarlar yo&apos;q</p>
+                ) : (
                   <div className="space-y-3.5">
-                    <h3 className={`text-base font-bold tracking-wide ${isDark ? "text-white" : "text-zinc-800"}`}>This Week</h3>
-                    
-                    {/* Read Card 1 (dark grey bg) */}
-                    <div className={`w-full border rounded-3xl p-5 flex items-start gap-4 shadow-lg ${
-                      isDark ? "bg-[#393939] border-white/5" : "bg-zinc-100 border-zinc-200"
-                    }`}>
-                      <div className="w-12 h-12 rounded-full bg-primary flex items-center justify-center shrink-0 shadow-md">
-                        <img
-                          src="/logo-loading.png"
-                          alt="B"
-                          className="w-7 h-7 object-contain"
-                        />
-                      </div>
-                      
-                      <div className="space-y-1">
-                        <h4 className={`text-sm font-bold leading-snug ${isDark ? "text-white" : "text-zinc-900"}`}>
-                          Bazmly just got better! 🚀
-                        </h4>
-                        <p className={`text-xs leading-normal ${isDark ? "text-white/80" : "text-zinc-650"}`}>
-                          Check out our latest update now
-                        </p>
-                        <p className={`text-[10px] font-semibold pt-1 ${isDark ? "text-white/45" : "text-zinc-400"}`}>
-                          20.01.2026, 18:00
-                        </p>
-                      </div>
-                    </div>
-
-                    {/* Read Card 2 (dark grey bg) */}
-                    <div className={`w-full border rounded-3xl p-5 flex items-start gap-4 shadow-lg ${
-                      isDark ? "bg-[#393939] border-white/5" : "bg-zinc-100 border-zinc-200"
-                    }`}>
-                      <div className="w-12 h-12 rounded-full bg-primary flex items-center justify-center shrink-0 shadow-md">
-                        <img
-                          src="/logo-loading.png"
-                          alt="B"
-                          className="w-7 h-7 object-contain"
-                        />
-                      </div>
-                      
-                      <div className="space-y-1">
-                        <h4 className={`text-sm font-bold leading-snug ${isDark ? "text-white" : "text-zinc-900"}`}>
-                          Bazmly just got better! 🚀
-                        </h4>
-                        <p className={`text-xs leading-normal ${isDark ? "text-white/80" : "text-zinc-650"}`}>
-                          Check out our latest update now
-                        </p>
-                        <p className={`text-[10px] font-semibold pt-1 ${isDark ? "text-white/45" : "text-zinc-400"}`}>
-                          20.01.2026, 18:00
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-
-                  <hr className={`border-t my-1 ${isDark ? "border-white/5" : "border-zinc-200"}`} />
-
-                  {/* Group 3: This Month */}
-                  <div className="space-y-3.5">
-                    <h3 className={`text-base font-bold tracking-wide ${isDark ? "text-white" : "text-zinc-800"}`}>This Month</h3>
-
-                    {/* Read Card 3 (dark grey bg, different date) */}
-                    <div className={`w-full border rounded-3xl p-5 flex items-start gap-4 shadow-lg ${
-                      isDark ? "bg-[#393939] border-white/5" : "bg-zinc-100 border-zinc-200"
-                    }`}>
-                      <div className="w-12 h-12 rounded-full bg-primary flex items-center justify-center shrink-0 shadow-md">
-                        <img
-                          src="/logo-loading.png"
-                          alt="B"
-                          className="w-7 h-7 object-contain"
-                        />
-                      </div>
-                      
-                      <div className="space-y-1">
-                        <h4 className={`text-sm font-bold leading-snug ${isDark ? "text-white" : "text-zinc-900"}`}>
-                          Bazmly just got better! 🚀
-                        </h4>
-                        <p className={`text-xs leading-normal ${isDark ? "text-white/80" : "text-zinc-650"}`}>
-                          Check out our latest update now
-                        </p>
-                        <p className={`text-[10px] font-semibold pt-1 ${isDark ? "text-white/45" : "text-zinc-400"}`}>
-                          12.01.2026, 15:30
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </main>
-            </div>
-          ) : showHistory ? (
-            /* ==================== HIGH-FIDELITY REGISTERED BOOKINGS HISTORY VIEW ==================== */
-            <div className={`flex flex-col flex-1 bg-[var(--background)] ${isDark ? "text-white" : "text-zinc-900"}`}>
-              {/* Top Bar Header */}
-              <div className={`relative flex items-center justify-between px-6 py-5 border-b ${
-                isDark ? "border-white/5" : "border-zinc-100"
-              }`}>
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => setShowHistory(false)}
-                    className={`p-2 rounded-xl transition-all active:scale-95 ${
-                      isDark ? "bg-white/5 text-white/80 hover:bg-white/10 hover:text-white" : "bg-zinc-100 text-zinc-700 hover:bg-zinc-200"
-                    }`}
-                  >
-                    <ChevronLeft className="h-5 w-5" />
-                  </button>
-                  <h1 className={`text-xl font-bold tracking-wide ${isDark ? "text-white" : "text-zinc-900"}`}>Band qilingan</h1>
-                </div>
-                
-                {/* Location pin with Toshkent */}
-                <div className={`flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-full border ${
-                  isDark 
-                    ? "text-white/80 bg-white/5 border-white/5" 
-                    : "text-zinc-800 bg-zinc-100 border-zinc-200"
-                }`}>
-                  <MapPin className="h-4 w-4 text-primary shrink-0" />
-                  <span>Toshkent</span>
-                </div>
-              </div>
-
-              {/* Scrollable Bookings List */}
-              <main className="flex-1 overflow-y-auto px-6 py-6 pb-2 flex flex-col gap-6 max-w-md mx-auto w-full text-left">
-                {[
-                  { id: "1", showBanner: true },
-                  { id: "2", showBanner: false }
-                ].map((item) => (
-                  <div
-                    key={item.id}
-                    className={`w-full rounded-3xl p-5 flex flex-col gap-4 transition-all duration-300 ${
-                      isDark
-                        ? "bg-[#393939] border border-white/5 shadow-xl hover:border-white/10"
-                        : "bg-white border border-[#FF6B00] shadow-md hover:shadow-lg hover:border-primary/80"
-                    }`}
-                  >
-                    {/* Top Restaurant Detail */}
-                    <div className="flex items-start gap-4">
-                      {/* Rounded restaurant image */}
-                      <img
-                        src="/images/restaurant.png"
-                        alt="Rest One"
-                        className={`w-20 h-20 rounded-2xl object-cover shrink-0 border shadow-md ${
-                          isDark ? "border-white/5" : "border-zinc-100"
+                    {notifications.map((n) => (
+                      <div
+                        key={n.id}
+                        className={`w-full border rounded-3xl p-5 flex items-start gap-4 relative shadow-lg ${
+                          !n.read_at
+                            ? isDark
+                              ? "bg-[#221A15] border-white/5"
+                              : "bg-orange-50/50 border-orange-100"
+                            : isDark
+                              ? "bg-[#393939] border-white/5"
+                              : "bg-zinc-100 border-zinc-200"
                         }`}
-                      />
-                      
-                      <div className="space-y-1 pr-1 w-full min-w-0">
-                        <h2 className={`text-base font-bold tracking-wide truncate ${
-                          isDark ? "text-white" : "text-zinc-900"
-                        }`}>Rest One</h2>
-                        
-                        {/* Distance & Status info */}
-                        <div className={`flex items-center gap-1.5 text-xs font-medium ${
-                          isDark ? "text-white/50" : "text-zinc-500"
-                        }`}>
-                          <MapPin className="h-3.5 w-3.5 shrink-0 text-zinc-400" />
-                          <span>1 km</span>
-                          <span className={isDark ? "text-white/20" : "text-zinc-300"}>|</span>
-                          <span className="w-1.5 h-1.5 rounded-full bg-[#10B981] shrink-0" />
-                          <span className="text-[#10B981] font-bold">Ochiq</span>
+                      >
+                        {!n.read_at && <span className="absolute top-3.5 right-3.5 w-2 h-2 rounded-full bg-[#E53E3E]" />}
+                        <div className="w-12 h-12 rounded-full bg-primary flex items-center justify-center shrink-0 shadow-md">
+                          <Bell className="w-6 h-6 text-white" />
                         </div>
-
-                        {/* Phone */}
-                        <div className={`flex items-center gap-1.5 text-xs font-medium ${
-                          isDark ? "text-white/60" : "text-zinc-650"
-                        }`}>
-                          <Phone className={`h-3.5 w-3.5 shrink-0 ${isDark ? "text-white/40" : "text-zinc-400"}`} />
-                          <span>+998 99 123 45 67</span>
-                        </div>
-
-                        {/* Address */}
-                        <div className={`flex items-center gap-1.5 text-xs font-medium truncate ${
-                          isDark ? "text-white/60" : "text-zinc-650"
-                        }`}>
-                          <MapPin className={`h-3.5 w-3.5 shrink-0 ${isDark ? "text-white/40" : "text-zinc-400"}`} />
-                          <span className="truncate">Umid qo'rg'oni 765 - uy</span>
+                        <div className="space-y-1">
+                          <h4 className={`text-sm font-bold leading-snug ${isDark ? "text-white" : "text-zinc-900"}`}>{n.title}</h4>
+                          {n.body && <p className={`text-xs leading-normal ${isDark ? "text-white/80" : "text-zinc-650"}`}>{n.body}</p>}
+                          <p className={`text-[10px] font-semibold pt-1 ${isDark ? "text-white/45" : "text-zinc-400"}`}>
+                            {new Date(n.sent_at).toLocaleString("uz-UZ")}
+                          </p>
                         </div>
                       </div>
-                    </div>
-
-                    {/* Horizontal Divider */}
-                    <hr className={`border-t ${isDark ? "border-white/5" : "border-zinc-100"}`} />
-
-                    {/* Booking metadata table */}
-                    <div className="space-y-2.5 text-xs font-semibold">
-                      <div className="flex justify-between items-center">
-                        <span className={isDark ? "text-white/40" : "text-zinc-400"}>Holat</span>
-                        <span className={`font-bold ${isDark ? "text-white" : "text-zinc-900"}`}>Band qilish tasdiqlandi</span>
-                      </div>
-                      <div className="flex justify-between items-center">
-                        <span className={isDark ? "text-white/40" : "text-zinc-400"}>Chek raqami:</span>
-                        <span className={`font-mono ${isDark ? "text-white/90" : "text-zinc-900"}`}>0789 091172</span>
-                      </div>
-                      <div className="flex justify-between items-center">
-                        <span className={isDark ? "text-white/40" : "text-zinc-400"}>Belgilandi:</span>
-                        <span className={isDark ? "text-white/90" : "text-zinc-900"}>11:00 • 26/02/2024</span>
-                      </div>
-                      <div className="flex justify-between items-center">
-                        <span className={isDark ? "text-white/40" : "text-zinc-400"}>Stol raqami:</span>
-                        <span className={isDark ? "text-white/90" : "text-zinc-900"}>4 - stol</span>
-                      </div>
-                      <div className="flex justify-between items-center">
-                        <span className={isDark ? "text-white/40" : "text-zinc-400"}>Restoran raqami:</span>
-                        <span className={isDark ? "text-white/90" : "text-zinc-900"}>+998 99 123 45 67</span>
-                      </div>
-                    </div>
-
-                    {/* Bottom orange banner with clock for Card 1 */}
-                    {item.showBanner && (
-                      <div className={`w-full rounded-2xl py-3.5 px-4 flex items-center justify-between text-sm font-bold ${
-                        isDark 
-                          ? "bg-[#FF6B00] text-white shadow-md animate-pulse" 
-                          : "bg-white border border-[#FF6B00] text-[#FF6B00]"
-                      }`}>
-                        <span className={isDark ? "text-white" : "text-[#FF6B00] opacity-80 font-medium"}>Qoldi:</span>
-                        <div className="flex items-center gap-2">
-                          <Clock className={`h-4.5 w-4.5 shrink-0 ${isDark ? "text-white" : "text-[#FF6B00]"}`} />
-                          <span>2 soat 25 daqiqa</span>
-                        </div>
-                      </div>
-                    )}
+                    ))}
                   </div>
-                ))}
+                )}
               </main>
             </div>
           ) : showHelp ? (
@@ -1936,11 +1248,13 @@ export default function LoginPage() {
                 {/* Circle Avatar with Camera/Plus icon */}
                 <div className="relative mb-8 mt-2">
                   <div className="w-36 h-36 rounded-full overflow-hidden border-2 border-white/10 shadow-2xl bg-zinc-800">
-                    <img
-                      src="/images/profil.jpg"
-                      alt="User Portrait"
-                      className="w-full h-full object-cover"
-                    />
+{user?.avatar_url ? (
+                      <img src={user.avatar_url} alt={fullName} className="w-full h-full object-cover" />
+                    ) : (
+                      <span className="w-full h-full flex items-center justify-center text-4xl font-black text-primary bg-primary/10">
+                        {(user?.first_name?.[0] ?? "") + (user?.last_name?.[0] ?? "")}
+                      </span>
+                    )}
                   </div>
                   <div className="absolute bottom-1 right-1 bg-white text-zinc-800 p-2.5 rounded-full shadow-lg border border-white/10 cursor-pointer hover:bg-zinc-100 transition-colors flex items-center justify-center">
                     <svg className="h-4.5 w-4.5 text-zinc-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -1974,34 +1288,12 @@ export default function LoginPage() {
                     <input
                       type="text"
                       value={editPhone}
-                      onChange={(e) => setEditPhone(e.target.value)}
-                      placeholder="+998 99 219 19 55"
+                      readOnly
+                      title="Telefon raqami akkauntga bog'langan va bu yerda o'zgarmaydi"
                       className={`w-full px-4 py-3.5 rounded-xl border text-sm font-medium outline-none focus:border-primary/50 transition-colors ${
                         isDark ? "border-white/10 bg-[#393939] text-white" : "border-zinc-200 bg-zinc-100 text-zinc-900 focus:bg-white"
                       }`}
                     />
-                  </div>
-
-                  {/* Location field */}
-                  <div className="space-y-2 text-left">
-                    <label className={`block text-xs font-semibold ${isDark ? "text-zinc-400" : "text-zinc-500"}`}>Manzil</label>
-                    <div className="relative">
-                      <select
-                        value={editLocation}
-                        onChange={(e) => setEditLocation(e.target.value)}
-                        className={`w-full px-4 py-3.5 pr-10 rounded-xl border text-sm font-medium outline-none focus:border-primary/50 transition-colors appearance-none cursor-pointer ${
-                          isDark ? "border-white/10 bg-[#393939] text-white" : "border-zinc-200 bg-zinc-100 text-zinc-900"
-                        }`}
-                      >
-                        <option value="Tashkent, Tashkent city">Toshkent</option>
-                        <option value="Samarkand, Samarkand region">Samarqand</option>
-                        <option value="Bukhara, Bukhara region">Buxoro</option>
-                        <option value="Andijan, Andijan region">Andijon</option>
-                      </select>
-                      <div className="absolute inset-y-0 right-4 flex items-center pointer-events-none text-zinc-400">
-                        <ChevronDown className="h-4.5 w-4.5" />
-                      </div>
-                    </div>
                   </div>
 
                   {/* Danger zone */}
@@ -2048,11 +1340,13 @@ export default function LoginPage() {
                         ? "border-4 border-primary/20 bg-zinc-800 shadow-2xl" 
                         : "bg-zinc-150 shadow-md"
                     }`}>
-                      <img
-                        src="/images/profil.jpg"
-                        alt="User Portrait"
-                        className="w-full h-full object-cover"
-                      />
+{user?.avatar_url ? (
+                      <img src={user.avatar_url} alt={fullName} className="w-full h-full object-cover" />
+                    ) : (
+                      <span className="w-full h-full flex items-center justify-center text-4xl font-black text-primary bg-primary/10">
+                        {(user?.first_name?.[0] ?? "") + (user?.last_name?.[0] ?? "")}
+                      </span>
+                    )}
                     </div>
                     {isDark && (
                       <div className="absolute bottom-0 right-1 bg-primary text-white p-2.5 rounded-full shadow-lg border-2 border-brand-dark">
@@ -2063,13 +1357,12 @@ export default function LoginPage() {
 
                   <div className="mt-5 space-y-1.5">
                     <h2 className={`text-2xl font-bold tracking-tight ${isDark ? "text-white" : "text-black"}`}>
-                      {fullName || "Alisher Raimov"}
+                      {fullName}
                     </h2>
                     <div className={`flex items-center justify-center gap-2 ${
                       isDark ? "text-xs font-medium text-white/60" : "text-base font-semibold text-black"
                     }`}>
-                      <MapPin className={isDark ? "h-4 w-4 text-primary" : "h-5.5 w-5.5 text-black"} />
-                      <span>{isDark ? location.split(",")[0] : location}</span>
+                      <span>{user?.phone ?? ""}</span>
                     </div>
                   </div>
 
@@ -2710,53 +2003,6 @@ export default function LoginPage() {
                         />
                       </div>
 
-                      {/* Apple and Google Continuation Buttons */}
-                      <div className="space-y-3 pt-2">
-                        {/* Google Button */}
-                        <button
-                          type="button"
-                          onClick={() => showToast("Google orqali kirish simulyatsiya qilindi")}
-                          className={`w-full flex items-center justify-center gap-2.5 py-3 rounded-2xl border text-xs font-bold transition-all active:scale-98 cursor-pointer ${
-                            isDark 
-                              ? "bg-[#2C2C2E]/60 hover:bg-[#3A3A3C] border-white/10 text-white" 
-                              : "bg-white hover:bg-zinc-50 border-zinc-200 text-zinc-800"
-                          }`}
-                        >
-                          <svg className="h-4.5 w-4.5" viewBox="0 0 24 24">
-                            <path
-                              fill="#4285F4"
-                              d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
-                            />
-                            <path
-                              fill="#34A853"
-                              d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
-                            />
-                            <path
-                              fill="#FBBC05"
-                              d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
-                            />
-                            <path
-                              fill="#EA4335"
-                              d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
-                            />
-                          </svg>
-                          <span>Continue with Google</span>
-                        </button>
-
-                        {/* Apple Button */}
-                        <button
-                          type="button"
-                          onClick={() => showToast("Apple orqali kirish simulyatsiya qilindi")}
-                          className={`w-full flex items-center justify-center gap-2.5 py-3 rounded-2xl border text-xs font-bold transition-all active:scale-98 cursor-pointer ${
-                            isDark 
-                              ? "bg-[#2C2C2E]/60 hover:bg-[#3A3A3C] border-white/10 text-white" 
-                              : "bg-white hover:bg-zinc-50 border-zinc-200 text-zinc-800"
-                          }`}
-                        >
-                          <Apple className="h-4.5 w-4.5" />
-                          <span>Continue with Apple</span>
-                        </button>
-                      </div>
                     </div>
 
                     <div className="space-y-4">
@@ -2781,164 +2027,8 @@ export default function LoginPage() {
                 )}
 
                 {/* Step "register_customer_phone_otp": Phone OTP verification */}
-                {step === "register_customer_phone_otp" && (
-                  <div className="flex-1 flex flex-col justify-between animate-scale-up space-y-6">
-                    <div className="space-y-5">
-                      <div className="text-left space-y-1">
-                        <div className="flex items-center gap-1.5 -ml-2">
-                          <button
-                            type="button"
-                            onClick={handleBackStep}
-                            className="p-1 rounded-lg transition-colors cursor-pointer text-zinc-950 dark:text-white hover:opacity-75"
-                          >
-                            <ChevronLeft className="h-7 w-7 stroke-[2.5px]" />
-                          </button>
-                          <h2 className={`text-2xl font-extrabold ${isDark ? "text-white" : "text-black"}`}>Tasdiqlash kodi</h2>
-                        </div>
-                        <p className={`text-sm ${isDark ? "text-white/60" : "text-zinc-500"} pl-7`}>
-                          Telefon raqamingizga yuborilgan 6 xonali kodni kiriting <span className="text-[#FF5A00] font-semibold">+998 {formatPhone(phone)}</span>
-                        </p>
-                      </div>
-
-                      {error && (
-                        <div className="rounded-xl bg-red-500/10 border border-red-500/20 p-3 text-xs text-red-400 text-center font-bold">
-                          {error}
-                        </div>
-                      )}
-
-                      <input
-                        type="text"
-                        value={otp.join("")}
-                        onChange={(e) => setOtp(e.target.value.split(""))}
-                        placeholder="000000"
-                        className={`w-full px-4 py-3.5 rounded-2xl border transition-all outline-none ${
-                          isDark ? "bg-[#2C2C2E]/60 border-white/10 text-white focus:border-[#FF5A00]" : "bg-zinc-50 border-zinc-200 text-black focus:border-[#FF5A00]"
-                        } text-sm font-bold tracking-wide`}
-                      />
-
-                      {/* Resend Code Link */}
-                      <div className="text-center">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            showToast("Tasdiqlash kodi qayta yuborildi!");
-                            setOtp(["", "", "", "", "", ""]);
-                          }}
-                          className="text-xs font-bold text-[#FF5A00] hover:text-[#E04F00] transition-colors"
-                        >
-                          Kod qayta yuborilsinmi?
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="space-y-4">
-                      {/* Next Button */}
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (otp.some((d) => d === "")) {
-                            setError("6 xonali kodni to'liq kiriting!");
-                            return;
-                          }
-                          setError("");
-                          // Clear OTP state for next email screen
-                          setOtp(["", "", "", "", "", ""]);
-                          setStep("register_customer_email_otp");
-                        }}
-                        className={`w-full py-3.5 rounded-[20px] font-bold text-sm tracking-wide transition-all active:scale-98 shadow-lg ${
-                          !otp.some((d) => d === "")
-                            ? "bg-[#FF5A00] text-white shadow-[#FF5A00]/25 cursor-pointer hover:bg-[#E04F00]"
-                            : isDark
-                              ? "bg-white/10 text-white/30 cursor-not-allowed"
-                              : "bg-[#FF5A00]/20 text-[#FF5A00]/45 cursor-not-allowed"
-                        }`}
-                      >
-                        Keyingisi
-                      </button>
-
-
-                    </div>
-                  </div>
-                )}
 
                 {/* Step "register_customer_email_otp": Email OTP verification */}
-                {step === "register_customer_email_otp" && (
-                  <div className="flex-1 flex flex-col justify-between animate-scale-up space-y-6">
-                    <div className="space-y-5">
-                      <div className="text-left space-y-1">
-                        <div className="flex items-center gap-1.5 -ml-2">
-                          <button
-                            type="button"
-                            onClick={handleBackStep}
-                            className="p-1 rounded-lg transition-colors cursor-pointer text-zinc-950 dark:text-white hover:opacity-75"
-                          >
-                            <ChevronLeft className="h-7 w-7 stroke-[2.5px]" />
-                          </button>
-                          <h2 className={`text-2xl font-extrabold ${isDark ? "text-white" : "text-black"}`}>Email tasdiqlash</h2>
-                        </div>
-                        <p className={`text-sm ${isDark ? "text-white/60" : "text-zinc-500"} pl-7`}>
-                          Tasdiqlash kodi elektron pochtangizga yuborildi: <span className="text-[#FF5A00] font-semibold">all*****mov564@gmail.com</span>
-                        </p>
-                      </div>
-
-                      {error && (
-                        <div className="rounded-xl bg-red-500/10 border border-red-500/20 p-3 text-xs text-red-400 text-center font-bold">
-                          {error}
-                        </div>
-                      )}
-
-                      <input
-                        type="text"
-                        value={otp.join("")}
-                        onChange={(e) => setOtp(e.target.value.split(""))}
-                        placeholder="000000"
-                        className={`w-full px-4 py-3.5 rounded-2xl border transition-all outline-none ${
-                          isDark ? "bg-[#2C2C2E]/60 border-white/10 text-white focus:border-[#FF5A00]" : "bg-zinc-50 border-zinc-200 text-black focus:border-[#FF5A00]"
-                        } text-sm font-bold tracking-wide`}
-                      />
-
-                      {/* Resend Code Link */}
-                      <div className="text-center">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            showToast("Tasdiqlash kodi qayta yuborildi!");
-                            setOtp(["", "", "", "", "", ""]);
-                          }}
-                          className="text-xs font-bold text-[#FF5A00] hover:text-[#E04F00] transition-colors"
-                        >
-                          Kod qayta yuborilsinmi?
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="space-y-4">
-                      {/* Next Button */}
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (otp.some((d) => d === "")) {
-                            setError("6 xonali kodni to'liq kiriting!");
-                            return;
-                          }
-                          setError("");
-                          setStep("register_customer_name");
-                        }}
-                        className={`w-full py-3.5 rounded-[20px] font-bold text-sm tracking-wide transition-all active:scale-98 shadow-lg ${
-                          !otp.some((d) => d === "")
-                            ? "bg-[#FF5A00] text-white shadow-[#FF5A00]/25 cursor-pointer hover:bg-[#E04F00]"
-                            : isDark
-                              ? "bg-white/10 text-white/30 cursor-not-allowed"
-                              : "bg-[#FF5A00]/20 text-[#FF5A00]/45 cursor-not-allowed"
-                        }`}
-                      >
-                        Keyingisi
-                      </button>
-
-
-                    </div>
-                  </div>
-                )}
 
                 {/* Step "register_customer_name": Name entry screen */}
                 {step === "register_customer_name" && (
@@ -2976,6 +2066,17 @@ export default function LoginPage() {
                             : "bg-zinc-50 border-zinc-200 text-black focus:border-[#FF5A00]"
                         } text-sm font-bold tracking-wide`}
                       />
+                      <input
+                        type="password"
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        placeholder="Parol (kamida 8 belgi)"
+                        className={`w-full px-4 py-3.5 rounded-2xl border transition-all outline-none ${
+                          isDark
+                            ? "bg-[#2C2C2E]/60 border-white/10 text-white focus:border-[#FF5A00]"
+                            : "bg-zinc-50 border-zinc-200 text-black focus:border-[#FF5A00]"
+                        } text-sm font-bold tracking-wide`}
+                      />
                     </div>
 
                     <div className="space-y-4">
@@ -2983,10 +2084,6 @@ export default function LoginPage() {
                       <button
                         type="button"
                         onClick={() => {
-                          if (!fullName.trim()) {
-                            setError("Iltimos ismingizni kiriting!");
-                            return;
-                          }
                           setError("");
                           handleCustomerFinalRegister();
                         }}
@@ -2998,10 +2095,8 @@ export default function LoginPage() {
                               : "bg-[#FF5A00]/20 text-[#FF5A00]/45 cursor-not-allowed"
                         }`}
                       >
-                        Tasdiqlash
+                        {loading ? "Yuborilmoqda..." : "Ro'yxatdan o'tish"}
                       </button>
-
-
                     </div>
                   </div>
                 )}
@@ -3129,6 +2224,24 @@ export default function LoginPage() {
                             </span>
                             <ChevronRight className="h-4.5 w-4.5 opacity-60 text-zinc-400" />
                           </button>
+                          <div className="grid grid-cols-3 gap-2">
+                            <input
+                              value={partnerStreet}
+                              onChange={(e) => setPartnerStreet(e.target.value)}
+                              placeholder="Ko'cha"
+                              className={`col-span-2 w-full px-4 py-3.5 rounded-2xl border transition-all outline-none text-sm font-bold ${
+                                isDark ? "bg-[#2C2C2E]/60 border-white/10 text-white focus:border-[#FF5A00]" : "bg-white border-zinc-200 text-black focus:border-[#FF5A00]"
+                              }`}
+                            />
+                            <input
+                              value={partnerHouse}
+                              onChange={(e) => setPartnerHouse(e.target.value)}
+                              placeholder="Uy"
+                              className={`w-full px-4 py-3.5 rounded-2xl border transition-all outline-none text-sm font-bold ${
+                                isDark ? "bg-[#2C2C2E]/60 border-white/10 text-white focus:border-[#FF5A00]" : "bg-white border-zinc-200 text-black focus:border-[#FF5A00]"
+                              }`}
+                            />
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -3140,10 +2253,6 @@ export default function LoginPage() {
                         onClick={() => {
                           if (!venueName.trim()) {
                             setError("Iltimos joyingiz nomini kiriting!");
-                            return;
-                          }
-                          if (!reg || !dist) {
-                            setError("Iltimos manzilni kiriting!");
                             return;
                           }
                           setError("");
@@ -3483,91 +2592,6 @@ export default function LoginPage() {
                   </div>
                 )}
 
-                {/* Step 5: Mock Gallery Upload */}
-                {step === 5 && (
-                  <div className="space-y-4 flex-1 flex flex-col justify-between animate-scale-up">
-                    <div className="space-y-4">
-                      <div className="space-y-1.5 text-left">
-                        <div className="flex items-center gap-1.5 -ml-2">
-                          <button
-                            type="button"
-                            onClick={handleBackStep}
-                            className="p-1 rounded-lg transition-colors cursor-pointer text-zinc-950 dark:text-white hover:opacity-75"
-                          >
-                            <ChevronLeft className="h-7 w-7 stroke-[2.5px]" />
-                          </button>
-                          <h2 className={`text-2xl font-extrabold ${isDark ? "text-white" : "text-black"}`}>
-                            Fotogalereya yuklash
-                          </h2>
-                        </div>
-                        <p className={`text-xs ${isDark ? "text-white/60" : "text-zinc-500"} pl-7`}>
-                          Jozibali rasmlardan kamida bittasini tanlang
-                        </p>
-                      </div>
-
-                      {error && (
-                        <div className="rounded-xl bg-red-500/10 border border-red-500/20 p-3 text-xs text-red-400 text-center font-bold">
-                          {error}
-                        </div>
-                      )}
-
-                      {/* Mock Image Grid */}
-                      <div className="grid grid-cols-3 gap-2">
-                        {[
-                          "https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=200&q=80",
-                          "https://images.unsplash.com/photo-1519167758481-83f550bb49b3?w=200&q=80",
-                          "https://images.unsplash.com/photo-1552566626-52f8b828add9?w=200&q=80",
-                          "https://images.unsplash.com/photo-1414235077428-338989a2e8c0?w=200&q=80",
-                          "https://images.unsplash.com/photo-1464366400600-7168b8af9bc3?w=200&q=80",
-                          "https://images.unsplash.com/photo-1544025162-d76694265947?w=200&q=80"
-                        ].map((imgUrl, i) => {
-                          const isSelected = venueImages.includes(imgUrl);
-                          return (
-                            <button
-                              key={i}
-                              type="button"
-                              onClick={() => {
-                                if (isSelected) {
-                                  setVenueImages(venueImages.filter(url => url !== imgUrl));
-                                } else {
-                                  setVenueImages([...venueImages, imgUrl]);
-                                }
-                              }}
-                              className={`aspect-square rounded-xl overflow-hidden relative border-2 transition-all cursor-pointer ${
-                                isSelected
-                                  ? "border-[#FF5A00] scale-95"
-                                  : "border-transparent opacity-60 hover:opacity-100"
-                              }`}
-                            >
-                              <img src={imgUrl} alt="Mock Venue" className="w-full h-full object-cover" />
-                              {isSelected && (
-                                <div className="absolute inset-0 bg-[#FF5A00]/25 flex items-center justify-center">
-                                  <div className="bg-[#FF5A00] rounded-full p-1 text-white">
-                                    <Check className="h-3 w-3" />
-                                  </div>
-                                </div>
-                              )}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-
-                    <button
-                      type="button"
-                      onClick={handleNextStep}
-                      className={`w-full py-3.5 rounded-[20px] font-bold text-sm tracking-wide transition-all active:scale-98 shadow-lg ${
-                        venueImages.length > 0
-                          ? "bg-[#FF5A00] text-white shadow-[#FF5A00]/25 cursor-pointer hover:bg-[#E04F00]"
-                          : isDark
-                            ? "bg-white/10 text-white/30 cursor-not-allowed"
-                            : "bg-[#FF5A00]/20 text-[#FF5A00]/45 cursor-not-allowed"
-                      }`}
-                    >
-                      Keyingisi
-                    </button>
-                  </div>
-                )}
 
                 {/* Step 6: Phone and Password Signup Credentials */}
                 {step === 6 && (
@@ -3587,7 +2611,7 @@ export default function LoginPage() {
                           </h2>
                         </div>
                         <p className={`text-xs ${isDark ? "text-white/60" : "text-zinc-500"} pl-7`}>
-                          Tizimga kirish uchun telefon raqamingizni kiriting
+                          Ismingiz va tizimga kirish uchun telefon raqamingiz
                         </p>
                       </div>
 
@@ -3598,6 +2622,14 @@ export default function LoginPage() {
                       )}
 
                       <div className="space-y-4 text-left">
+                        <input
+                          value={fullName}
+                          onChange={(e) => setFullName(e.target.value)}
+                          placeholder="Ism va familiyangiz"
+                          className={`w-full px-4 py-3.5 rounded-2xl border transition-all outline-none text-sm font-bold ${
+                            isDark ? "bg-[#2C2C2E]/60 border-white/10 text-white focus:border-[#FF5A00]" : "bg-white border-zinc-200 text-black focus:border-[#FF5A00]"
+                          }`}
+                        />
                         {/* Phone Input Box */}
                         <div className={`flex items-center gap-3.5 px-4 py-3.5 rounded-2xl border transition-all ${
                           isDark 
@@ -3698,121 +2730,18 @@ export default function LoginPage() {
                       <button
                         type="button"
                         onClick={() => {
-                          if (password.length < 6) {
-                            setError("Parol kamida 6 ta belgidan iborat bo'lishi kerak!");
-                            return;
-                          }
                           setError("");
                           handleNextStep();
                         }}
                         className={`w-full py-4 rounded-full font-bold text-sm tracking-wide transition-all active:scale-98 shadow-lg ${
-                          password.trim().length >= 6
+                          password.trim().length >= 8 && !loading
                             ? "bg-[#FF5A00] text-white shadow-[#FF5A00]/25 cursor-pointer hover:bg-[#E04F00]"
                             : isDark
                               ? "bg-white/10 text-white/30 cursor-not-allowed"
                               : "bg-[#FF5A00]/20 text-[#FF5A00]/45 cursor-not-allowed"
                         }`}
                       >
-                        Parolni tasdiqlash
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                {/* Step 7: SMS Verification / OTP */}
-                {step === 7 && (
-                  <div className="space-y-4 flex-1 flex flex-col justify-between animate-scale-up">
-                    <div className="space-y-4">
-                      <div className="text-left space-y-1.5">
-                        <div className="flex items-center gap-1.5 -ml-2">
-                          <button
-                            type="button"
-                            onClick={handleBackStep}
-                            className="p-1 rounded-lg transition-colors cursor-pointer text-zinc-950 dark:text-white hover:opacity-75"
-                          >
-                            <ChevronLeft className="h-7 w-7 stroke-[2.5px]" />
-                          </button>
-                          <h2 className={`text-2xl font-extrabold ${isDark ? "text-white" : "text-black"}`}>Tasdiqlash kodi</h2>
-                        </div>
-                        <p className={`text-xs ${isDark ? "text-white/60" : "text-zinc-500"} pl-7`}>
-                          +998 {formatPhone(phone)} raqamiga yuborilgan 6 xonali tasdiqlash kodini kiriting
-                        </p>
-                      </div>
-
-                      {error && (
-                        <div className="rounded-xl bg-red-500/10 border border-red-500/20 p-3 text-xs text-red-400 text-center font-bold">
-                          {error}
-                        </div>
-                      )}
-
-                      <div className="space-y-4 text-left">
-                        <input
-                          type="text"
-                          maxLength={6}
-                          value={otp.join("")}
-                          onChange={(e) => {
-                            const val = e.target.value.replace(/\D/g, "").slice(0, 6);
-                            const newOtp = ["", "", "", "", "", ""];
-                            for (let i = 0; i < val.length; i++) {
-                              newOtp[i] = val[i];
-                            }
-                            setOtp(newOtp);
-                          }}
-                          placeholder="000000"
-                          className={`w-full px-4 py-3.5 rounded-2xl border text-center transition-all outline-none ${
-                            isDark
-                              ? "bg-[#2C2C2E]/60 border-white/10 text-white focus:border-[#FF5A00]"
-                              : "bg-white border-zinc-200 text-black focus:border-[#FF5A00]"
-                          } text-sm font-bold tracking-[0.5em]`}
-                        />
-                      </div>
-
-                      <div className="text-center">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            showToast("Tasdiqlash kodi qayta yuborildi!");
-                            setOtp(["", "", "", "", "", ""]);
-                          }}
-                          className="text-xs font-bold text-[#FF5A00] hover:text-[#E04F00] transition-colors"
-                        >
-                          Kod qayta yuborilsinmi?
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="space-y-4">
-                      {/* Next Button */}
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (otp.some((d) => d === "")) {
-                            setError("Tasdiqlash kodini to'liq kiriting!");
-                            return;
-                          }
-                          setError("");
-                          handleOtpConfirm();
-                        }}
-                        className={`w-full py-4 rounded-full font-bold text-sm tracking-wide transition-all active:scale-98 shadow-lg ${
-                          !otp.some((d) => d === "")
-                            ? "bg-[#FF5A00] text-white shadow-[#FF5A00]/25 cursor-pointer hover:bg-[#E04F00]"
-                            : isDark
-                              ? "bg-white/10 text-white/30 cursor-not-allowed"
-                              : "bg-[#FF5A00]/20 text-[#FF5A00]/45 cursor-not-allowed"
-                        }`}
-                        disabled={loading}
-                      >
-                        {loading ? (
-                          <span className="flex items-center justify-center gap-1.5">
-                            <svg className="animate-spin h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
-                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                            </svg>
-                            Tekshirilmoqda...
-                          </span>
-                        ) : (
-                          "Tasdiqlash"
-                        )}
+                        {loading ? "Ro'yxatdan o'tkazilmoqda..." : "Ro'yxatdan o'tish"}
                       </button>
                     </div>
                   </div>
@@ -3849,14 +2778,14 @@ export default function LoginPage() {
                         </div>
                         <div className="flex justify-between items-center text-xs">
                           <span className="opacity-60">Manzil:</span>
-                          <span className="font-bold">{reg}, {dist}</span>
+                          <span className="font-bold">{reg}, {dist}, {partnerStreet} {partnerHouse}</span>
                         </div>
                         <div className="flex justify-between items-center text-xs">
                           <span className="opacity-60">Sig'imi:</span>
                           <span className="font-bold">{venueCapacity} kishi</span>
                         </div>
                         <div className="flex justify-between items-center text-xs">
-                          <span className="opacity-60">Narxi (bir kishi):</span>
+                          <span className="opacity-60">Narxi:</span>
                           <span className="font-bold text-[#FF5A00]">{Number(venuePrice).toLocaleString("uz-UZ")} UZS dan</span>
                         </div>
                         <div className="flex justify-between items-center text-xs">
@@ -3867,7 +2796,7 @@ export default function LoginPage() {
                     </div>
 
                     <button
-                      onClick={handleCompletePartnerRegistration}
+                      onClick={() => router.push("/admin")}
                       className="w-full py-4 flex items-center justify-center gap-2 rounded-[20px] bg-[#FF5A00] hover:bg-[#E04F00] text-white font-bold text-sm shadow-lg hover:shadow-primary/20 transition-all mt-6 cursor-pointer"
                     >
                       Admin panelga o'tish <ArrowRight className="h-4 w-4" />
