@@ -26,6 +26,7 @@ import {
   BookingListItem,
   VenueListItem,
 } from "@/lib/api";
+import { formatDate, formatMoney, formatTime } from "@/lib/format";
 
 export default function FeedPage() {
   const { theme } = useTheme();
@@ -448,13 +449,13 @@ export default function FeedPage() {
                   }`}
                 >
                   <div className="flex items-start gap-4">
-                    <img
-                      src="/images/restaurant.png"
-                      alt={booking.venue_name}
-                      className={`w-20 h-20 rounded-2xl object-cover shrink-0 border shadow-md ${
+                    <div
+                      className={`w-20 h-20 rounded-2xl shrink-0 border flex items-center justify-center bg-[#FF6B00]/10 text-[#FF6B00] ${
                         isDark ? "border-white/5" : "border-zinc-100"
                       }`}
-                    />
+                    >
+                      <Calendar className="h-8 w-8" />
+                    </div>
 
                     <div className="space-y-1 pr-1 w-full min-w-0">
                       <h2
@@ -471,9 +472,9 @@ export default function FeedPage() {
                         }`}
                       >
                         <Calendar className="h-3.5 w-3.5 shrink-0 text-zinc-400" />
-                        <span>{booking.booking_date}</span>
+                        <span>{formatDate(booking.booking_date)}</span>
                         <span className={isDark ? "text-white/20" : "text-zinc-300"}>|</span>
-                        <span>{booking.start_time}</span>
+                        <span>{formatTime(booking.start_time)}</span>
                       </div>
 
                       <div
@@ -499,136 +500,44 @@ export default function FeedPage() {
                             ? "bg-emerald-500/10 text-emerald-500"
                             : booking.status === "pending"
                             ? "bg-amber-500/10 text-amber-500"
+                            : booking.status === "completed"
+                            ? "bg-zinc-500/10 text-zinc-400"
                             : "bg-red-500/10 text-red-500"
                         }`}
                       >
-                        {booking.status === "confirmed"
-                          ? "Tasdiqlangan"
-                          : booking.status === "checked_in"
-                          ? "Tashrif buyurilgan"
-                          : booking.status === "pending"
-                          ? "Kutilmoqda"
-                          : "Bekor qilingan"}
+                        {({
+                          pending: "Kutilmoqda",
+                          confirmed: "Tasdiqlangan",
+                          checked_in: "Tashrif buyurilgan",
+                          completed: "Yakunlangan",
+                          cancelled: "Bekor qilingan",
+                          no_show: "Kelmagan",
+                        } as Record<string, string>)[booking.status] ?? booking.status}
                       </span>
                     </div>
 
                     <div className="flex justify-between items-center">
                       <span className={isDark ? "text-white/40" : "text-zinc-400"}>Jami summa:</span>
                       <span className="font-bold text-primary">
-                        {Number(booking.total_amount || 0).toLocaleString()} {booking.currency || "UZS"}
+                        {formatMoney(booking.total_amount, booking.currency) ?? "—"}
                       </span>
                     </div>
                   </div>
                 </Link>
               ))
             ) : (
-              /* Fallback / Default active sample bookings if user has no live bookings yet */
-              [
-                { id: "1", name: "Rest One", location: "Umid qo'rg'oni 765 - uy", time: "11:00 • 26/02/2026", table: "4 - stol", check: "0789 091172", showBanner: true },
-                { id: "2", name: "Versal Tantanalar Zali", location: "Chilonzor 12-uy", time: "18:00 • 15/03/2026", table: "Asosiy Zal", check: "0844 192831", showBanner: false },
-              ].map((item) => (
-                <div
-                  key={item.id}
-                  className={`w-full rounded-3xl p-5 flex flex-col gap-4 transition-all duration-300 ${
-                    isDark
-                      ? "bg-[#393939] border border-white/5 shadow-xl hover:border-white/10"
-                      : "bg-white border border-[#FF6B00] shadow-md hover:shadow-lg"
-                  }`}
+              <div className="text-center py-16 space-y-3">
+                <Ticket className="h-12 w-12 text-zinc-500 mx-auto" />
+                <p className={`text-sm font-bold ${isDark ? "text-white" : "text-zinc-800"}`}>
+                  {isAuthenticated ? "Sizda hali bronlar yo'q" : "Bronlaringizni ko'rish uchun tizimga kiring"}
+                </p>
+                <Link
+                  href={isAuthenticated ? "/" : "/login"}
+                  className="inline-block mt-2 px-5 py-2.5 bg-[#FF6B00] text-white rounded-xl text-xs font-bold shadow-lg"
                 >
-                  <div className="flex items-start gap-4">
-                    <img
-                      src="/images/restaurant.png"
-                      alt={item.name}
-                      className={`w-20 h-20 rounded-2xl object-cover shrink-0 border shadow-md ${
-                        isDark ? "border-white/5" : "border-zinc-100"
-                      }`}
-                    />
-
-                    <div className="space-y-1 pr-1 w-full min-w-0">
-                      <h2
-                        className={`text-base font-bold tracking-wide truncate ${
-                          isDark ? "text-white" : "text-zinc-900"
-                        }`}
-                      >
-                        {item.name}
-                      </h2>
-
-                      <div
-                        className={`flex items-center gap-1.5 text-xs font-medium ${
-                          isDark ? "text-white/50" : "text-zinc-500"
-                        }`}
-                      >
-                        <MapPin className="h-3.5 w-3.5 shrink-0 text-zinc-400" />
-                        <span>1 km</span>
-                        <span className={isDark ? "text-white/20" : "text-zinc-300"}>|</span>
-                        <span className="w-1.5 h-1.5 rounded-full bg-[#10B981] shrink-0" />
-                        <span className="text-[#10B981] font-bold">Ochiq</span>
-                      </div>
-
-                      <div
-                        className={`flex items-center gap-1.5 text-xs font-medium ${
-                          isDark ? "text-white/60" : "text-zinc-600"
-                        }`}
-                      >
-                        <Phone className={`h-3.5 w-3.5 shrink-0 ${isDark ? "text-white/40" : "text-zinc-400"}`} />
-                        <span>+998 99 123 45 67</span>
-                      </div>
-
-                      <div
-                        className={`flex items-center gap-1.5 text-xs font-medium truncate ${
-                          isDark ? "text-white/60" : "text-zinc-600"
-                        }`}
-                      >
-                        <MapPin className={`h-3.5 w-3.5 shrink-0 ${isDark ? "text-white/40" : "text-zinc-400"}`} />
-                        <span className="truncate">{item.location}</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  <hr className={`border-t ${isDark ? "border-white/5" : "border-zinc-100"}`} />
-
-                  <div className="space-y-2.5 text-xs font-semibold">
-                    <div className="flex justify-between items-center">
-                      <span className={isDark ? "text-white/40" : "text-zinc-400"}>Holat</span>
-                      <span className={`font-bold ${isDark ? "text-white" : "text-zinc-900"}`}>
-                        Band qilish tasdiqlandi
-                      </span>
-                    </div>
-                    <div className="flex justify-between items-center">
-                      <span className={isDark ? "text-white/40" : "text-zinc-400"}>Chek raqami:</span>
-                      <span className={`font-mono ${isDark ? "text-white/90" : "text-zinc-900"}`}>
-                        {item.check}
-                      </span>
-                    </div>
-                    <div className="flex justify-between items-center">
-                      <span className={isDark ? "text-white/40" : "text-zinc-400"}>Belgilandi:</span>
-                      <span className={isDark ? "text-white/90" : "text-zinc-900"}>{item.time}</span>
-                    </div>
-                    <div className="flex justify-between items-center">
-                      <span className={isDark ? "text-white/40" : "text-zinc-400"}>Stol / Zal:</span>
-                      <span className={isDark ? "text-white/90" : "text-zinc-900"}>{item.table}</span>
-                    </div>
-                  </div>
-
-                  {item.showBanner && (
-                    <div
-                      className={`w-full rounded-2xl py-3.5 px-4 flex items-center justify-between text-sm font-bold ${
-                        isDark
-                          ? "bg-[#FF6B00] text-white shadow-md animate-pulse"
-                          : "bg-white border border-[#FF6B00] text-[#FF6B00]"
-                      }`}
-                    >
-                      <span className={isDark ? "text-white" : "text-[#FF6B00] opacity-80 font-medium"}>
-                        Qoldi:
-                      </span>
-                      <div className="flex items-center gap-2">
-                        <Clock className={`h-4.5 w-4.5 shrink-0 ${isDark ? "text-white" : "text-[#FF6B00]"}`} />
-                        <span>2 soat 25 daqiqa</span>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              ))
+                  {isAuthenticated ? "Joy tanlash" : "Kirish"}
+                </Link>
+              </div>
             )}
           </main>
         </div>
