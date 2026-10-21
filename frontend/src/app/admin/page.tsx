@@ -39,8 +39,15 @@ import {
   partnerService,
   orderService,
   venueService,
+  geoService,
+  BazmlyApiError,
   VenueRead,
   VenueDetailRead,
+  VenueGroupRead,
+  StaffRoleRead,
+  RegionRead,
+  DistrictRead,
+  BookingRead,
   BookingListItem,
   VenueStaffListItem,
   MenuItemListItem,
@@ -49,10 +56,9 @@ import {
   TableBoardRow,
   StaffCountsRead,
   StaffInvitationCreated,
-  authService,
-  getAccessToken,
-  clearTokens,
 } from "@/lib/api";
+import { formatAddress, formatDate, formatMoney, formatTime, toApiDate } from "@/lib/format";
+import { upcomingDates } from "@/lib/venue-hours";
 
 interface VenueDisplay {
   id: string | number;
@@ -80,67 +86,89 @@ function getFoodEmoji(name: string): string {
   return "🍽️";
 }
 
+/** The server's own sentence when it gave one, otherwise ours. */
+function errorMessage(err: unknown, fallback: string): string {
+  return err instanceof BazmlyApiError ? err.message : fallback;
+}
+
+const TABLE_SIZES = [2, 4, 6, 8, 10];
+
 export default function AdminPage() {
   const router = useRouter();
   const { theme, toggleTheme } = useTheme();
-  const { user, isAuthenticated, logout, refreshUser } = useAuth();
+  const { isAuthenticated, loading: authLoading, logout } = useAuth();
   const isDark = theme === "dark";
-  const [mounted, setMounted] = useState(false);
-  const [authorized, setAuthorized] = useState(false);
 
-  // Active Venue Selection
-  const [activeVenueId, setActiveVenueId] = useState<number | null>(null);
+  // Who this panel belongs to. "no-group" is an account with no chain yet —
+  // it is offered to create one, never given one silently.
+  const [sessionState, setSessionState] = useState<"loading" | "no-group" | "ready" | "error">("loading");
+  const [sessionError, setSessionError] = useState<string | null>(null);
+  const [group, setGroup] = useState<VenueGroupRead | null>(null);
   const [venuesList, setVenuesList] = useState<VenueRead[]>([]);
-  const [partnerName, setPartnerName] = useState("Tinchlik Plaza");
-  const [venueHours, setVenueHours] = useState("09:00 - 23:00");
-  const [partnerLocation, setPartnerLocation] = useState("Samarqand, Pastdarg'om");
+  const [activeVenueId, setActiveVenueId] = useState<number | null>(null);
+  const [venueDetail, setVenueDetail] = useState<VenueDetailRead | null>(null);
   const [showVenueDropdown, setShowVenueDropdown] = useState(false);
+  const activeVenue = venuesList.find((v) => v.id === activeVenueId) ?? null;
+  const partnerName = activeVenue?.name ?? group?.name ?? "";
+  const partnerLocation = formatAddress(activeVenue?.street, activeVenue?.house_number) ?? "";
+  const todayHours = venueDetail?.working_hours.find((h) => h.weekday === (new Date().getDay() + 6) % 7);
+  const venueHours =
+    !todayHours || !venueDetail
+      ? "Belgilanmagan"
+      : todayHours.is_closed || !todayHours.opens_at || !todayHours.closes_at
+        ? "Bugun dam olish"
+        : `${formatTime(todayHours.opens_at)} - ${formatTime(todayHours.closes_at)}`;
 
-  // API Data
+  // API data
   const [analytics, setAnalytics] = useState<DashboardRead | null>(null);
   const [bookings, setBookings] = useState<BookingListItem[]>([]);
+  const [bookingsDay, setBookingsDay] = useState(() => toApiDate(new Date()));
   const [tableBoard, setTableBoard] = useState<TableBoardRow[]>([]);
   const [bookingsSubTab, setBookingsSubTab] = useState<"list" | "table-board">("list");
   const [staff, setStaff] = useState<VenueStaffListItem[]>([]);
+  const [roles, setRoles] = useState<StaffRoleRead[]>([]);
   const [menuItems, setMenuItems] = useState<MenuItemListItem[]>([]);
   const [allMenuItems, setAllMenuItems] = useState<MenuItemListItem[]>([]);
   const [totalMenuCount, setTotalMenuCount] = useState<number>(0);
   const [categories, setCategories] = useState<MenuCategoryRead[]>([]);
   const [loadingData, setLoadingData] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
-  // Tab State: "home" | "bookings" | "menu" | "staff" | "settings"
   const [activeTab, setActiveTab] = useState<"home" | "bookings" | "menu" | "staff" | "settings">("home");
   const [toastMessage, setToastMessage] = useState("");
 
-  // QR Check-in states
+  // QR check-in
   const [showCheckInModal, setShowCheckInModal] = useState(false);
   const [checkInToken, setCheckInToken] = useState("");
   const [checkInLoading, setCheckInLoading] = useState(false);
-  const [checkInResult, setCheckInResult] = useState<{
-    success: boolean;
-    message: string;
-    booking?: any;
-  } | null>(null);
+  const [checkInError, setCheckInError] = useState<string | null>(null);
+  const [checkInResult, setCheckInResult] = useState<{ message: string; booking: BookingRead & { table_number?: number | null } } | null>(null);
 
-  // Add Venue Modal
-  const [myGroupId, setMyGroupId] = useState<number | null>(null);
+  // Add venue
   const [showAddVenueModal, setShowAddVenueModal] = useState(false);
   const [newVenueName, setNewVenueName] = useState("");
   const [newVenueType, setNewVenueType] = useState<"restoran" | "toyxona">("restoran");
   const [newVenuePhone, setNewVenuePhone] = useState("");
-  const [newVenueSeats, setNewVenueSeats] = useState("100");
+  const [newVenueSeats, setNewVenueSeats] = useState("");
+  const [newVenueStreet, setNewVenueStreet] = useState("");
+  const [newVenueHouse, setNewVenueHouse] = useState("");
+  const [regions, setRegions] = useState<RegionRead[]>([]);
+  const [newVenueRegionId, setNewVenueRegionId] = useState<number | null>(null);
+  const [districts, setDistricts] = useState<DistrictRead[]>([]);
+  const [newVenueDistrictId, setNewVenueDistrictId] = useState<number | null>(null);
+  const [isSubmittingVenue, setIsSubmittingVenue] = useState(false);
 
-  // Add Staff Modal & Management
+  // Staff
   const [showAddStaffModal, setShowAddStaffModal] = useState(false);
   const [newStaffName, setNewStaffName] = useState("");
-  const [newStaffRole, setNewStaffRole] = useState("4"); // default 4 (Ofitsant)
+  const [newStaffRole, setNewStaffRole] = useState("");
   const [newStaffPhone, setNewStaffPhone] = useState("");
   const [staffCounts, setStaffCounts] = useState<StaffCountsRead | null>(null);
   const [createdInvitation, setCreatedInvitation] = useState<StaffInvitationCreated | null>(null);
   const [isSubmittingStaff, setIsSubmittingStaff] = useState(false);
   const [staffRoleFilter, setStaffRoleFilter] = useState<string | "all">("all");
 
-  // Add Menu Item Modal
+  // Menu
   const [showAddMenuModal, setShowAddMenuModal] = useState(false);
   const [newItemName, setNewItemName] = useState("");
   const [newItemPrice, setNewItemPrice] = useState("");
@@ -151,213 +179,136 @@ export default function AdminPage() {
   const [newItemDescription, setNewItemDescription] = useState("");
   const [isSubmittingMenu, setIsSubmittingMenu] = useState(false);
   const [itemToDelete, setItemToDelete] = useState<MenuItemListItem | null>(null);
-  const [isSeedingMenu, setIsSeedingMenu] = useState(false);
+
+  // Tables
+  const [tableCounts, setTableCounts] = useState<Record<number, string>>({});
+  const [isCreatingTables, setIsCreatingTables] = useState(false);
+
+  // Settings
+  const [settingsName, setSettingsName] = useState("");
+  const [settingsOpens, setSettingsOpens] = useState("");
+  const [settingsCloses, setSettingsCloses] = useState("");
+  const [isSavingSettings, setIsSavingSettings] = useState(false);
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
-    setTimeout(() => setToastMessage(""), 3000);
+    setTimeout(() => setToastMessage(""), 3500);
   };
 
-  // Ensure real partner session with valid token & venue ownership
-  const ensurePartnerSession = useCallback(async () => {
-    let token = getAccessToken();
+  // --- session -----------------------------------------------------------
 
-    // 1. If token exists, verify if it's still valid by calling getMyGroup
-    if (token) {
-      try {
-        const myGrp = await partnerService.getMyGroup();
-        if (myGrp?.id) {
-          setMyGroupId(myGrp.id);
-          const branchesRes = await partnerService.getGroupBranches(myGrp.id);
-          const branches = branchesRes?.branches || [];
-          if (branches.length > 0) {
-            const mappedBranches: any[] = branches.map((b: any) => ({
-              id: b.id,
-              group_id: myGrp.id,
-              name: b.name,
-              slug: b.name.toLowerCase().replace(/\s+/g, "-"),
-              venue_type: myGrp.primary_venue_type || "toyxona",
-              phone: b.phone || "+998 90 123 45 67",
-              street: b.street || "Toshkent",
-              house_number: b.house_number || "1",
-              status: b.status,
-              total_seats: b.total_seats || 500,
-            }));
-            setVenuesList(mappedBranches);
-            const targetId = mappedBranches[0].id;
-            setActiveVenueId(targetId);
-            setPartnerName(mappedBranches[0].name);
-            return { token, venueId: targetId };
-          }
-        }
-      } catch (err: any) {
-        // If token is invalid or expired (401), clear and re-register
-        if (err?.status === 401) {
-          clearTokens();
-          token = null;
-        }
+  const loadSession = useCallback(async () => {
+    setSessionState("loading");
+    setSessionError(null);
+    try {
+      const myGroup = await partnerService.getMyGroup();
+      const branches = await partnerService.listVenues(myGroup.id);
+      setGroup(myGroup);
+      setVenuesList(branches);
+      setActiveVenueId((current) => (current && branches.some((b) => b.id === current) ? current : (branches[0]?.id ?? null)));
+      setSessionState("ready");
+      partnerService
+        .listStaffRoles()
+        .then(setRoles)
+        .catch(() => setRoles([]));
+    } catch (err) {
+      if (err instanceof BazmlyApiError && err.status === 404) {
+        setSessionState("no-group");
+      } else {
+        setSessionError(errorMessage(err, "Hamkor ma'lumotlarini yuklab bo'lmadi"));
+        setSessionState("error");
       }
     }
+  }, []);
 
-    // 2. If no token or token was invalid/cleared, auto-register partner session
-    if (!token) {
-      const randomDigits = Math.floor(1000000 + Math.random() * 9000000);
-      const regRes = await authService.register({
-        phone: `+99890${randomDigits}`,
-        password: "Password123!",
-        first_name: partnerName || "Hamkor",
-        last_name: "Admin",
-      });
-      token = regRes.access_token;
-    }
-
-    // 3. Create group and branch for this partner
-    const groupRes = await partnerService.createGroupWithBranch({
-      group: {
-        name: partnerName || "Mumtoz Saroyi",
-        primary_venue_type: "restoran",
-      },
-      branch: {
-        district_id: 1,
-        street: "Amir Temur shoh ko'chasi",
-        house_number: "12",
-        latitude: 41.311081,
-        longitude: 69.279737,
-        name: partnerName || "Mumtoz Chilonzor",
-        venue_type: "restoran",
-        phone: "+998901234567",
-        total_seats: 120,
-      },
-    });
-
-    const newGroupId = groupRes.group.id;
-    const newBranch: any = groupRes.branches[0];
-    setMyGroupId(newGroupId);
-    setActiveVenueId(newBranch.id);
-    setPartnerName(newBranch.name);
-    setVenuesList([
-      {
-        id: newBranch.id,
-        group_id: newGroupId,
-        name: newBranch.name,
-        slug: newBranch.name.toLowerCase().replace(/\s+/g, "-"),
-        venue_type: "restoran",
-        phone: newBranch.phone || "+998 90 123 45 67",
-        street: newBranch.street || "Toshkent",
-        house_number: newBranch.house_number || "1",
-        status: newBranch.status,
-        total_seats: newBranch.total_seats || 120,
-      } as any,
-    ]);
-
-    await partnerService.updateVenue(newBranch.id, { status: "active" }).catch(() => null);
-
-    return { token, venueId: newBranch.id };
-  }, [partnerName]);
-
-  const initDoneRef = React.useRef(false);
-
-  // Auth check and initial load - run ONLY once on mount
   useEffect(() => {
-    setMounted(true);
-    setAuthorized(true);
+    if (authLoading) return;
+    if (!isAuthenticated) {
+      router.replace("/login");
+      return;
+    }
+    loadSession();
+  }, [authLoading, isAuthenticated, loadSession, router]);
 
-    if (initDoneRef.current) return;
-    initDoneRef.current = true;
+  // The selected branch's hours and status, for the header and settings.
+  useEffect(() => {
+    if (!activeVenueId) {
+      setVenueDetail(null);
+      return;
+    }
+    venueService
+      .getVenueDetail(activeVenueId)
+      .then((detail) => {
+        setVenueDetail(detail);
+        setSettingsName(detail.venue.name);
+        const sample = detail.working_hours.find((h) => !h.is_closed && h.opens_at && h.closes_at);
+        setSettingsOpens(sample?.opens_at ? formatTime(sample.opens_at) : "");
+        setSettingsCloses(sample?.closes_at ? formatTime(sample.closes_at) : "");
+      })
+      .catch(() => setVenueDetail(null));
+  }, [activeVenueId]);
 
-    const name = localStorage.getItem("fullName") || user?.first_name || "Mumtoz Saroyi";
-    setPartnerName(name);
+  // --- per-tab data --------------------------------------------------------
 
-    ensurePartnerSession()
-      .then(() => refreshUser())
-      .catch((e) => console.error("Partner session init error:", e));
-  }, [ensurePartnerSession, user, refreshUser]);
-
-  // Load venue data whenever activeVenueId or tab changes
   const loadVenueData = useCallback(async () => {
-    if (!activeVenueId) return;
+    if (!activeVenueId || !group) return;
     setLoadingData(true);
+    setLoadError(null);
     try {
-      const currentGroup =
-        myGroupId ||
-        (venuesList.find((v) => v.id === activeVenueId) as any)?.venue_group_id ||
-        (venuesList.find((v) => v.id === activeVenueId) as any)?.group_id ||
-        1;
-
       if (activeTab === "home") {
         const [ana, items, staffList] = await Promise.all([
-          partnerService.getDashboardAnalytics(currentGroup, activeVenueId).catch(() => null),
-          partnerService.listMenuItems(activeVenueId).catch(() => []),
-          partnerService.listStaff(currentGroup).catch(() => []),
+          partnerService.getDashboardAnalytics(group.id, activeVenueId),
+          partnerService.listMenuItems(activeVenueId),
+          partnerService.listStaff(group.id),
         ]);
-        if (ana) {
-          setAnalytics(ana);
-        }
+        setAnalytics(ana);
         setMenuItems(items);
         setAllMenuItems(items);
         setTotalMenuCount(items.length);
         setStaff(staffList);
       } else if (activeTab === "bookings") {
-        const [bookList, tbList] = await Promise.all([
-          orderService.getVenueBookings(activeVenueId).catch(() => []),
-          orderService.getTableBoard(activeVenueId).catch(() => []),
+        const [bookList, board] = await Promise.all([
+          orderService.getVenueBookings(activeVenueId, bookingsDay),
+          orderService.getTableBoard(activeVenueId),
         ]);
         setBookings(bookList);
-        setTableBoard(tbList);
+        setTableBoard(board);
       } else if (activeTab === "staff") {
         const [staffList, counts] = await Promise.all([
-          partnerService.listStaff(currentGroup).catch(() => []),
-          partnerService.getStaffCounts(currentGroup).catch(() => null),
+          partnerService.listStaff(group.id),
+          partnerService.getStaffCounts(group.id),
         ]);
         setStaff(staffList);
-        if (counts) setStaffCounts(counts);
+        setStaffCounts(counts);
       } else if (activeTab === "menu") {
-        let [cats, allVenueItems] = await Promise.all([
-          partnerService.listCategories(currentGroup, activeVenueId).catch(() => []),
-          partnerService.listMenuItems(activeVenueId).catch(() => []),
+        const [cats, venueItems] = await Promise.all([
+          partnerService.listCategories(group.id, activeVenueId),
+          partnerService.listMenuItems(activeVenueId),
         ]);
-
-        // Agar guruhda toifalar hali bo'lmasa, standart toifalarni yaratamiz
-        if (cats.length === 0) {
-          const defaultCatNames = ["Asosiy taomlar", "Salatlar & Gazaklar", "Ichimliklar"];
-          for (let i = 0; i < defaultCatNames.length; i++) {
-            await partnerService.createCategory(
-              { name: defaultCatNames[i], sort_order: i + 1 },
-              currentGroup,
-              activeVenueId
-            ).catch(() => null);
-          }
-          cats = await partnerService.listCategories(currentGroup, activeVenueId).catch(() => []);
-        }
-
         setCategories(cats);
-        setAllMenuItems(allVenueItems);
-        setTotalMenuCount(allVenueItems.length);
-
-        if (selectedMenuCategory === "all") {
-          setMenuItems(allVenueItems);
-        } else {
-          const filtered = await partnerService.listMenuItems(
-            activeVenueId,
-            selectedMenuCategory
-          ).catch(() => []);
-          setMenuItems(filtered);
-        }
+        setAllMenuItems(venueItems);
+        setTotalMenuCount(venueItems.length);
+        setMenuItems(
+          selectedMenuCategory === "all"
+            ? venueItems
+            : venueItems.filter((item) => item.menu_category_id === selectedMenuCategory),
+        );
       }
+    } catch (err) {
+      setLoadError(errorMessage(err, "Ma'lumotlarni yuklab bo'lmadi"));
     } finally {
       setLoadingData(false);
     }
-  }, [activeVenueId, activeTab, myGroupId, selectedMenuCategory]);
+  }, [activeVenueId, activeTab, group, selectedMenuCategory, bookingsDay]);
 
   useEffect(() => {
     loadVenueData();
   }, [loadVenueData]);
 
+  // --- actions -------------------------------------------------------------
+
   const handleLogout = async () => {
-    try {
-      await logout();
-    } catch {}
-    showToast("Tizimdan chiqildi.");
+    await logout();
     router.push("/login");
   };
 
@@ -366,62 +317,28 @@ export default function AdminPage() {
     try {
       if (action === "confirmed") {
         await orderService.confirmBooking(bookingId, activeVenueId);
-        showToast("Buyurtma tasdiqlandi!");
+        showToast("Bron tasdiqlandi");
       } else {
         await orderService.rejectBooking(bookingId, undefined, activeVenueId);
-        showToast("Buyurtma rad etildi.");
+        showToast("Bron rad etildi");
       }
       loadVenueData();
-    } catch {
-      showToast(action === "confirmed" ? "Buyurtma tasdiqlandi!" : "Buyurtma rad etildi.");
+    } catch (err) {
+      showToast(errorMessage(err, "Amalni bajarib bo'lmadi"));
     }
   };
 
   const handleCheckIn = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (!checkInToken.trim() || !activeVenueId) {
-      showToast("Iltimos, QR tokenni kiriting!");
-      return;
-    }
+    if (!checkInToken.trim() || !activeVenueId) return;
     setCheckInLoading(true);
+    setCheckInError(null);
     try {
-      let res: any;
-      try {
-        res = await orderService.checkInBooking({
-          qr_token: checkInToken.trim(),
-          venue_id: activeVenueId,
-        });
-      } catch {
-        res = {
-          id: Math.floor(Math.random() * 9000) + 1000,
-          status: "checked_in",
-          checked_in_at: new Date().toISOString(),
-          guests_count: 4,
-          table_number: 4,
-        };
-      }
-
-      // Update local storage if matching booking exists
-      try {
-        const localRaw = localStorage.getItem("my_local_bookings");
-        if (localRaw) {
-          const list = JSON.parse(localRaw);
-          const updated = list.map((b: any) =>
-            b.status === "confirmed" ? { ...b, status: "checked_in" } : b
-          );
-          localStorage.setItem("my_local_bookings", JSON.stringify(updated));
-        }
-      } catch {}
-
-      setCheckInResult({
-        success: true,
-        message: "Mijoz muvaffaqiyatli qabul qilindi (Check-In)!",
-        booking: res,
-      });
-      showToast("Mijoz muvaffaqiyatli qabul qilindi!");
+      const booking = await orderService.checkInBooking({ qr_token: checkInToken.trim(), venue_id: activeVenueId });
+      setCheckInResult({ message: "Mijoz qabul qilindi", booking });
       loadVenueData();
-    } catch {
-      showToast("Check-In muvaffaqiyatli amalga oshirildi!");
+    } catch (err) {
+      setCheckInError(errorMessage(err, "Chipta qabul qilinmadi"));
     } finally {
       setCheckInLoading(false);
     }
@@ -430,246 +347,170 @@ export default function AdminPage() {
   const handleCheckOut = async (bookingId: number | string) => {
     if (!activeVenueId) return;
     try {
-      await orderService.checkOutBooking(bookingId, activeVenueId).catch(() => null);
-      showToast("Mijoz tashrifi yakunlandi (Check-out)!");
+      await orderService.checkOutBooking(bookingId, activeVenueId);
+      showToast("Tashrif yakunlandi");
       loadVenueData();
-    } catch {
-      showToast("Check-out amalga oshirildi!");
+    } catch (err) {
+      showToast(errorMessage(err, "Check-out bajarilmadi"));
     }
   };
 
-  const handleGenerateTables = async () => {
-    setLoadingData(true);
+  const handleCreateTables = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeVenueId) return;
+    const counts = Object.fromEntries(
+      Object.entries(tableCounts)
+        .map(([seats, count]) => [seats, Number(count)] as const)
+        .filter(([, count]) => count > 0),
+    );
+    if (Object.keys(counts).length === 0) {
+      showToast("Kamida bitta stol sonini kiriting");
+      return;
+    }
+    setIsCreatingTables(true);
     try {
-      showToast("Stollar generatsiya qilinmoqda...");
-      const { venueId } = await ensurePartnerSession();
-      await partnerService.createTablesBulk(venueId, {
-        counts: { "4": 4, "6": 4 },
-      });
-      showToast("8 ta stol muvaffaqiyatli yaratildi!");
+      const created = await partnerService.createTablesBulk(activeVenueId, { counts });
+      showToast(`${created.length} ta stol yaratildi`);
+      setTableCounts({});
       loadVenueData();
-    } catch (err: any) {
-      console.error("Bulk tables error:", err);
-      showToast(err?.message || "Stollarni yaratishda xatolik yuz berdi.");
+    } catch (err) {
+      showToast(errorMessage(err, "Stollarni yaratib bo'lmadi"));
     } finally {
-      setLoadingData(false);
+      setIsCreatingTables(false);
+    }
+  };
+
+  const openAddVenue = () => {
+    setShowAddVenueModal(true);
+    if (regions.length === 0) {
+      geoService
+        .getRegions()
+        .then(setRegions)
+        .catch((err) => showToast(errorMessage(err, "Viloyatlarni yuklab bo'lmadi")));
+    }
+  };
+
+  const chooseRegion = async (regionId: number) => {
+    setNewVenueRegionId(regionId);
+    setNewVenueDistrictId(null);
+    setDistricts([]);
+    try {
+      setDistricts(await geoService.getDistricts(regionId));
+    } catch (err) {
+      showToast(errorMessage(err, "Tumanlarni yuklab bo'lmadi"));
     }
   };
 
   const handleAddVenue = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newVenueName.trim()) {
-      showToast("To'yxona yoki filial nomini kiriting!");
+    const district = districts.find((d) => d.id === newVenueDistrictId);
+    if (!newVenueName.trim() || !district || !newVenueStreet.trim() || !newVenueHouse.trim() || !newVenuePhone.trim()) {
+      showToast("Barcha majburiy maydonlarni to'ldiring");
       return;
     }
+    const seats = Number(newVenueSeats) || null;
+    // The district's own point stands in for the pin until there is a map picker.
+    const branch = {
+      name: newVenueName.trim(),
+      venue_type: newVenueType,
+      district_id: district.id,
+      street: newVenueStreet.trim(),
+      house_number: newVenueHouse.trim(),
+      latitude: Number(district.latitude),
+      longitude: Number(district.longitude),
+      phone: newVenuePhone.trim(),
+      ...(newVenueType === "toyxona" ? { capacity_max: seats } : { total_seats: seats }),
+    };
+    setIsSubmittingVenue(true);
     try {
-      let createdVenue: any = null;
-
-      // 1. Resolve or fetch current partner group
-      let currentGroupId = myGroupId;
-      if (!currentGroupId) {
-        const meGroup = await partnerService.getMyGroup().catch(() => null);
-        if (meGroup?.id) {
-          currentGroupId = meGroup.id;
-          setMyGroupId(meGroup.id);
-        }
-      }
-
-      if (currentGroupId) {
-        // Group already exists: create new branch under this group
-        createdVenue = await partnerService.createVenue({
-          district_id: 1,
-          street: "Amir Temur ko'chasi",
-          house_number: "1",
-          latitude: 41.3111,
-          longitude: 69.2797,
-          name: newVenueName.trim(),
-          venue_type: newVenueType as any,
-          phone: newVenuePhone.trim() || "+998 90 123 45 67",
-          total_seats: Number(newVenueSeats) || 100,
-        }, currentGroupId).catch(() => null);
+      let venueId: number;
+      if (group) {
+        venueId = (await partnerService.createVenue(branch, group.id)).id;
       } else {
-        // First venue: create both Brand Group and Branch
-        const groupRes = await partnerService.createGroupWithBranch({
-          group: {
-            name: newVenueName.trim() + " Brendi",
-            primary_venue_type: newVenueType as any,
-          },
-          branch: {
-            district_id: 1,
-            street: "Amir Temur ko'chasi",
-            house_number: "1",
-            latitude: 41.3111,
-            longitude: 69.2797,
-            name: newVenueName.trim(),
-            venue_type: newVenueType as any,
-            phone: newVenuePhone.trim() || "+998 90 123 45 67",
-            total_seats: Number(newVenueSeats) || 100,
-          },
-        }).catch(() => null);
-
-        if (groupRes?.group?.id) {
-          setMyGroupId(groupRes.group.id);
-        }
-        createdVenue = groupRes?.branches?.[0] || null;
+        const created = await partnerService.createGroupWithBranch({
+          group: { name: branch.name, primary_venue_type: newVenueType },
+          branch,
+        });
+        venueId = created.branches[0].id;
       }
-
-      // Fallback if network was offline
-      if (!createdVenue) {
-        createdVenue = {
-          id: Math.floor(Math.random() * 8000) + 100,
-          group_id: currentGroupId || 1,
-          name: newVenueName.trim(),
-          slug: newVenueName.trim().toLowerCase().replace(/\s+/g, "-"),
-          venue_type: newVenueType,
-          phone: newVenuePhone.trim() || "+998 90 123 45 67",
-          street: "Toshkent",
-          house_number: "1",
-          status: "active" as any,
-          total_seats: Number(newVenueSeats) || 100,
-        };
-      } else {
-        // Activate venue on backend so it appears in public catalog immediately
-        await partnerService.updateVenue(createdVenue.id, { status: "active" }).catch(() => {});
-        createdVenue.status = "active";
-      }
-
-      setVenuesList((prev) => [createdVenue as any, ...prev]);
-      setActiveVenueId(createdVenue.id);
-      setPartnerName(createdVenue.name);
+      // Published straight away, as the old panel did — but a refusal is said.
+      await partnerService.updateVenue(venueId, { status: "active" });
       setShowAddVenueModal(false);
       setNewVenueName("");
       setNewVenuePhone("");
-      showToast("To'yxona muvaffaqiyatli qo'shildi va bazaga saqlandi!");
-    } catch {
-      showToast("To'yxona muvaffaqiyatli qo'shildi!");
-      setShowAddVenueModal(false);
+      setNewVenueStreet("");
+      setNewVenueHouse("");
+      setNewVenueSeats("");
+      setActiveVenueId(venueId);
+      showToast("Muassasa qo'shildi");
+      await loadSession();
+    } catch (err) {
+      showToast(errorMessage(err, "Muassasani qo'shib bo'lmadi"));
+    } finally {
+      setIsSubmittingVenue(false);
     }
   };
 
   const handleToggleStaffActive = async (staffId: number, currentActive: boolean) => {
-    if (!activeVenueId) return;
-    const currentGroup =
-      myGroupId ||
-      (venuesList.find((v) => v.id === activeVenueId) as any)?.venue_group_id ||
-      (venuesList.find((v) => v.id === activeVenueId) as any)?.group_id ||
-      1;
-
+    if (!activeVenueId || !group) return;
     try {
       await partnerService.setStaffActive(staffId, activeVenueId, !currentActive);
-      setStaff((prev) =>
-        prev.map((s) => (s.id === staffId ? { ...s, is_active: !currentActive } : s))
-      );
+      setStaff((prev) => prev.map((s) => (s.id === staffId ? { ...s, is_active: !currentActive } : s)));
       showToast(!currentActive ? "Xodim faollashtirildi" : "Xodim nofaol qilindi");
-      partnerService.getStaffCounts(currentGroup).then((c) => { if (c) setStaffCounts(c); }).catch(() => null);
-    } catch (err: any) {
-      showToast(err?.message || "Holatni o'zgartirishda xatolik");
+      partnerService.getStaffCounts(group.id).then(setStaffCounts).catch(() => {});
+    } catch (err) {
+      showToast(errorMessage(err, "Holatni o'zgartirib bo'lmadi"));
     }
   };
 
   const handleAddStaff = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newStaffName.trim() || !newStaffPhone.trim() || !activeVenueId) {
-      showToast("Barcha maydonlarni to'ldiring!");
+    const roleId = Number(newStaffRole);
+    if (!newStaffName.trim() || !newStaffPhone.trim() || !roleId || !activeVenueId || !group) {
+      showToast("Barcha maydonlarni to'ldiring");
       return;
     }
-    const currentGroup =
-      myGroupId ||
-      (venuesList.find((v) => v.id === activeVenueId) as any)?.venue_group_id ||
-      (venuesList.find((v) => v.id === activeVenueId) as any)?.group_id ||
-      1;
-
     setIsSubmittingStaff(true);
     try {
-      const roleId = Number(newStaffRole) || 4;
-      const cleanPhone = newStaffPhone.trim().startsWith("+") ? newStaffPhone.trim() : `+${newStaffPhone.trim()}`;
-
       const res = await partnerService.inviteStaff(
-        currentGroup,
-        {
-          full_name: newStaffName.trim(),
-          phone: cleanPhone,
-          staff_role_id: roleId,
-          venue_id: activeVenueId,
-        },
-        activeVenueId
+        group.id,
+        { full_name: newStaffName.trim(), phone: newStaffPhone.trim(), staff_role_id: roleId, venue_id: activeVenueId },
+        activeVenueId,
       );
-
       setCreatedInvitation(res);
       setShowAddStaffModal(false);
       setNewStaffName("");
       setNewStaffPhone("");
-      showToast("Xodim taklifnomasi yaratildi!");
       loadVenueData();
-    } catch (err: any) {
-      showToast(err?.message || "Xodim taklif qilishda xatolik yuz berdi");
+    } catch (err) {
+      showToast(errorMessage(err, "Xodimni taklif qilib bo'lmadi"));
     } finally {
       setIsSubmittingStaff(false);
     }
   };
 
-  const handleQuickActivateStaff = async (invitation: StaffInvitationCreated) => {
-    try {
-      setIsSubmittingStaff(true);
-      await partnerService.acceptInvitation(invitation.phone, {
-        login: invitation.login,
-        temporary_password: invitation.temporary_password,
-        new_password: "Password123!",
-      });
-      showToast(`${invitation.full_name} muvaffaqiyatli faollashtirildi!`);
-      setCreatedInvitation(null);
-      loadVenueData();
-    } catch (err: any) {
-      showToast(err?.message || "Faollashtirishda xatolik");
-    } finally {
-      setIsSubmittingStaff(false);
-    }
-  };
-
-  const handleSelectCategory = async (catId: number | "all") => {
+  const handleSelectCategory = (catId: number | "all") => {
     setSelectedMenuCategory(catId);
-    if (!activeVenueId) return;
-    if (catId === "all") {
-      setMenuItems(allMenuItems);
-      return;
-    }
-    setLoadingData(true);
-    try {
-      const items = await partnerService.listMenuItems(
-        activeVenueId,
-        catId
-      );
-      setMenuItems(items);
-    } catch {
-      setMenuItems([]);
-    } finally {
-      setLoadingData(false);
-    }
+    setMenuItems(catId === "all" ? allMenuItems : allMenuItems.filter((item) => item.menu_category_id === catId));
   };
 
   const handleAddCategory = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newCategoryName.trim() || !activeVenueId) {
-      showToast("Kategoriya nomini kiriting!");
-      return;
-    }
-    const currentGroup = myGroupId || 1;
+    if (!newCategoryName.trim() || !activeVenueId || !group) return;
+    setIsSubmittingMenu(true);
     try {
-      setIsSubmittingMenu(true);
       const newCat = await partnerService.createCategory(
         { name: newCategoryName.trim(), sort_order: categories.length + 1 },
-        currentGroup,
-        activeVenueId
+        group.id,
+        activeVenueId,
       );
-      showToast(`"${newCat.name}" toifasi qo'shildi!`);
+      showToast(`"${newCat.name}" toifasi qo'shildi`);
       setNewCategoryName("");
       setShowAddCategoryModal(false);
-      const cats = await partnerService.listCategories(currentGroup, activeVenueId).catch(() => []);
-      setCategories(cats);
-      setSelectedMenuCategory(newCat.id);
-      setMenuItems([]);
-    } catch (err: any) {
-      showToast(err?.message || "Kategoriya yaratishda xatolik");
+      setCategories(await partnerService.listCategories(group.id, activeVenueId));
+      setNewItemCategory(newCat.id);
+    } catch (err) {
+      showToast(errorMessage(err, "Toifani yaratib bo'lmadi"));
     } finally {
       setIsSubmittingMenu(false);
     }
@@ -677,68 +518,41 @@ export default function AdminPage() {
 
   const handleAddMenuItem = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newItemName.trim() || !newItemPrice || !activeVenueId) {
-      showToast("Ma'lumotlarni to'liq kiriting!");
+    const categoryId = newItemCategory ?? categories[0]?.id;
+    const price = Number(newItemPrice.replace(/\D/g, ""));
+    if (!newItemName.trim() || !price || !activeVenueId) {
+      showToast("Nom va narxni kiriting");
       return;
     }
-
-    const currentGroup = myGroupId || 1;
+    if (!categoryId) {
+      showToast("Avval toifa qo'shing");
+      return;
+    }
     setIsSubmittingMenu(true);
     try {
-      let targetCategoryId = newItemCategory;
-
-      // Agar kategoriya mavjud bo'lmasa, avtomatik birinchi toifa olinadi
-      if (!targetCategoryId) {
-        if (categories.length > 0) {
-          targetCategoryId = categories[0].id;
-        } else {
-          const defaultCat = await partnerService.createCategory(
-            { name: "Asosiy taomlar", sort_order: 1 },
-            currentGroup,
-            activeVenueId
-          );
-          targetCategoryId = defaultCat.id;
-          const updatedCats = await partnerService.listCategories(currentGroup, activeVenueId).catch(() => []);
-          setCategories(updatedCats);
-        }
-      }
-
-      const cleanPrice = Number(newItemPrice.replace(/\D/g, "")) || 50000;
-
-      // 1. Taom yaratish
       await partnerService.createMenuItem(
         {
           payload: {
-            menu_category_id: targetCategoryId,
+            menu_category_id: categoryId,
             name: newItemName.trim(),
             description: newItemDescription.trim() || null,
-            base_price: cleanPrice,
+            base_price: price,
             currency: "UZS",
-            sort_order: (allMenuItems.length || menuItems.length) + 1,
+            sort_order: allMenuItems.length + 1,
             has_variants: false,
           },
         },
-        activeVenueId
-      ).catch(() => null);
-
-      showToast(`"${newItemName.trim()}" menyuga muvaffaqiyatli qo'shildi!`);
+        activeVenueId,
+      );
+      showToast(`"${newItemName.trim()}" menyuga qo'shildi`);
       setShowAddMenuModal(false);
       setNewItemName("");
       setNewItemPrice("");
       setNewItemDescription("");
-
-      // 2. Ro'yxatni yangilash
-      const [updatedCats, updatedItems] = await Promise.all([
-        partnerService.listCategories(currentGroup, activeVenueId).catch(() => []),
-        partnerService.listMenuItems(activeVenueId).catch(() => []),
-      ]);
-      setCategories(updatedCats);
-      setAllMenuItems(updatedItems);
-      setTotalMenuCount(updatedItems.length);
-      setMenuItems(updatedItems);
       setSelectedMenuCategory("all");
-    } catch (err: any) {
-      showToast(err?.message || "Taom qo'shishda xatolik yuz berdi");
+      loadVenueData();
+    } catch (err) {
+      showToast(errorMessage(err, "Taomni qo'shib bo'lmadi"));
     } finally {
       setIsSubmittingMenu(false);
     }
@@ -748,74 +562,192 @@ export default function AdminPage() {
     if (!activeVenueId) return;
     setIsSubmittingMenu(true);
     try {
-      // Filialdan taomni olib tashlash
+      // Unticks this branch only; the dish stays in the chain's catalogue.
       await partnerService.attachMenuItemToBranches(itemId, { venue_ids: [] }, activeVenueId);
-      showToast("Taom filial menyusidan o'chirildi!");
+      showToast("Taom filial menyusidan olib tashlandi");
       setItemToDelete(null);
-      const [updatedCats, allItems] = await Promise.all([
-        partnerService.listCategories(myGroupId || 1, activeVenueId).catch(() => []),
-        partnerService.listMenuItems(activeVenueId).catch(() => []),
-      ]);
-      setCategories(updatedCats);
-      setAllMenuItems(allItems);
-      setTotalMenuCount(allItems.length);
-      if (selectedMenuCategory === "all") {
-        setMenuItems(allItems);
-      } else {
-        const filtered = await partnerService.listMenuItems(activeVenueId, selectedMenuCategory).catch(() => []);
-        setMenuItems(filtered);
-      }
-    } catch (err: any) {
-      showToast(err?.message || "O'chirishda xatolik");
+      loadVenueData();
+    } catch (err) {
+      showToast(errorMessage(err, "O'chirib bo'lmadi"));
     } finally {
       setIsSubmittingMenu(false);
     }
   };
 
-  const handleSeedDefaultMenu = async () => {
-    if (!activeVenueId) return;
-    const currentGroup = myGroupId || 1;
-    setIsSeedingMenu(true);
+  const handleSaveSettings = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeVenueId || !settingsName.trim()) return;
+    setIsSavingSettings(true);
     try {
-      // 1. Agar filialda allaqachon taomlar bo'lsa, ularni to'g'ridan-to'g'ri ko'rsatamiz
-      const currentItems = await partnerService.listMenuItems(activeVenueId).catch(() => []);
-      if (currentItems.length > 0) {
-        setAllMenuItems(currentItems);
-        setMenuItems(currentItems);
-        setTotalMenuCount(currentItems.length);
-        setSelectedMenuCategory("all");
-        showToast(`Filialingizda mavjud ${currentItems.length} ta taom menyuga yuklandi!`);
-        return;
+      await partnerService.updateVenue(activeVenueId, { name: settingsName.trim() });
+      if (settingsOpens && settingsCloses) {
+        // One opening and closing time for the whole week — the same shape
+        // the onboarding wizard writes.
+        await partnerService.updateWorkingHours(activeVenueId, {
+          days: Array.from({ length: 7 }, (_, weekday) => ({
+            weekday,
+            opens_at: `${settingsOpens}:00`,
+            closes_at: `${settingsCloses}:00`,
+            is_closed: false,
+          })),
+        });
       }
-
-      // 2. Agar filialda taomlar bo'sh bo'lsa, bazada mavjud taomlarni (1..19) filialga biriktiramiz
-      showToast("Bazadan taomlar menyuga yuklanmoqda...");
-      const knownIds = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19];
-      await Promise.all(
-        knownIds.map((id) =>
-          partnerService.attachMenuItemToBranches(id, { venue_ids: [activeVenueId] }, activeVenueId).catch(() => null)
-        )
-      );
-
-      // 3. Yangilangan ro'yxatni olish
-      const [newCats, newItems] = await Promise.all([
-        partnerService.listCategories(currentGroup, activeVenueId).catch(() => []),
-        partnerService.listMenuItems(activeVenueId).catch(() => []),
+      showToast("Sozlamalar saqlandi");
+      const [branches, detail] = await Promise.all([
+        partnerService.listVenues(group?.id),
+        venueService.getVenueDetail(activeVenueId),
       ]);
-      setCategories(newCats);
-      setAllMenuItems(newItems);
-      setMenuItems(newItems);
-      setTotalMenuCount(newItems.length);
-      setSelectedMenuCategory("all");
-      showToast("Namunaviy taomlar muvaffaqiyatli yuklandi!");
-    } catch (err: any) {
-      showToast(err?.message || "Namunaviy menyuni yuklashda xatolik");
+      setVenuesList(branches);
+      setVenueDetail(detail);
+    } catch (err) {
+      showToast(errorMessage(err, "Saqlab bo'lmadi"));
     } finally {
-      setIsSeedingMenu(false);
+      setIsSavingSettings(false);
     }
   };
 
-  if (!mounted || !authorized) {
+  const roleById = (roleId: number) => roles.find((r) => r.id === roleId);
+  const invitableRoles = roles.filter((r) => r.slug !== "owner");
+  const staffRolesPresent = roles.filter((r) => staff.some((s) => s.staff_role_id === r.id));
+  const pendingCount = bookings.filter((b) => b.status === "pending").length;
+  const anyModalOpen =
+    showAddCategoryModal ||
+    showAddMenuModal ||
+    itemToDelete !== null ||
+    showAddStaffModal ||
+    createdInvitation !== null ||
+    showCheckInModal ||
+    showAddVenueModal;
+  const bookingDays = upcomingDates(0, 7);
+
+  const fieldClass = `w-full px-4 py-3 rounded-xl border text-sm font-bold outline-none ${
+    isDark ? "border-white/10 bg-[#1E1E1E] text-white" : "border-zinc-200 bg-zinc-50 text-zinc-900"
+  }`;
+
+  const addVenueModal = showAddVenueModal && (
+    <div className="fixed inset-0 z-[60] bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center animate-fade-in p-4">
+      <div className="absolute inset-0" onClick={() => setShowAddVenueModal(false)} />
+      <div
+        className={`w-full max-w-md max-h-[90vh] overflow-y-auto rounded-[32px] p-6 flex flex-col gap-4 z-10 border relative text-left shadow-2xl ${
+          isDark ? "bg-[#2C2C2E] border-white/10 text-white" : "bg-white border-zinc-200 text-zinc-900"
+        }`}
+      >
+        <div className="flex justify-between items-center">
+          <div className="flex items-center gap-2">
+            <div className="p-2 rounded-xl bg-primary/10 text-primary">
+              <Building2 className="h-5 w-5" />
+            </div>
+            <div>
+              <h3 className="font-black text-base">{group ? "Yangi filial qo'shish" : "Muassasangizni qo'shing"}</h3>
+              <p className="text-[11px] text-zinc-400 font-bold">{group ? group.name : "Birinchi filial bilan tarmoq ochiladi"}</p>
+            </div>
+          </div>
+          <button onClick={() => setShowAddVenueModal(false)} className="p-2 rounded-full bg-white/5 hover:bg-white/10 text-zinc-400 cursor-pointer">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <form onSubmit={handleAddVenue} className="space-y-3.5">
+          <label className="block space-y-1">
+            <span className="text-xs font-bold opacity-60">Nomi</span>
+            <input required value={newVenueName} onChange={(e) => setNewVenueName(e.target.value)} placeholder="Masalan: Rayhon Chilonzor" className={fieldClass} />
+          </label>
+
+          <div className="space-y-1">
+            <span className="text-xs font-bold opacity-60">Turi</span>
+            <div className="grid grid-cols-2 gap-2">
+              {(
+                [
+                  ["restoran", "Restoran / Kafe"],
+                  ["toyxona", "To'yxona / Zal"],
+                ] as const
+              ).map(([type, label]) => (
+                <button
+                  key={type}
+                  type="button"
+                  onClick={() => setNewVenueType(type)}
+                  className={`py-2.5 rounded-xl text-xs font-bold border transition-all cursor-pointer ${
+                    newVenueType === type ? "bg-primary text-white border-primary" : "border-zinc-300 dark:border-white/10 text-zinc-400"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            <label className="block space-y-1">
+              <span className="text-xs font-bold opacity-60">Viloyat</span>
+              <select required value={newVenueRegionId ?? ""} onChange={(e) => chooseRegion(Number(e.target.value))} className={`${fieldClass} cursor-pointer`}>
+                <option value="" disabled>
+                  Tanlang
+                </option>
+                {regions.map((r) => (
+                  <option key={r.id} value={r.id}>
+                    {r.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="block space-y-1">
+              <span className="text-xs font-bold opacity-60">Tuman</span>
+              <select
+                required
+                disabled={districts.length === 0}
+                value={newVenueDistrictId ?? ""}
+                onChange={(e) => setNewVenueDistrictId(Number(e.target.value))}
+                className={`${fieldClass} cursor-pointer disabled:opacity-50`}
+              >
+                <option value="" disabled>
+                  Tanlang
+                </option>
+                {districts.map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {d.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          <div className="grid grid-cols-3 gap-2">
+            <label className="block space-y-1 col-span-2">
+              <span className="text-xs font-bold opacity-60">Ko&apos;cha</span>
+              <input required value={newVenueStreet} onChange={(e) => setNewVenueStreet(e.target.value)} placeholder="Amir Temur ko'chasi" className={fieldClass} />
+            </label>
+            <label className="block space-y-1">
+              <span className="text-xs font-bold opacity-60">Uy</span>
+              <input required value={newVenueHouse} onChange={(e) => setNewVenueHouse(e.target.value)} placeholder="12" className={fieldClass} />
+            </label>
+          </div>
+
+          <label className="block space-y-1">
+            <span className="text-xs font-bold opacity-60">Telefon raqam</span>
+            <input required type="tel" value={newVenuePhone} onChange={(e) => setNewVenuePhone(e.target.value)} placeholder="+998 90 123 45 67" className={fieldClass} />
+          </label>
+
+          <label className="block space-y-1">
+            <span className="text-xs font-bold opacity-60">
+              {newVenueType === "toyxona" ? "Eng ko'p mehmonlar soni" : "O'rinlar soni"} (ixtiyoriy)
+            </span>
+            <input type="number" min={1} value={newVenueSeats} onChange={(e) => setNewVenueSeats(e.target.value)} className={fieldClass} />
+          </label>
+
+          <button
+            type="submit"
+            disabled={isSubmittingVenue}
+            className="w-full py-4 bg-[#FF5A00] text-white font-extrabold text-xs tracking-wider rounded-2xl shadow-lg mt-2 cursor-pointer transition-all active:scale-[0.98] flex items-center justify-center gap-2 disabled:opacity-50"
+          >
+            {isSubmittingVenue && <Loader2 className="h-4 w-4 animate-spin" />}
+            <span>Saqlash</span>
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+
+  if (authLoading || sessionState === "loading") {
     return (
       <div className="flex flex-col items-center justify-center min-h-screen bg-[var(--background)]">
         <Loader2 className="animate-spin h-10 w-10 text-primary" />
@@ -824,7 +756,45 @@ export default function AdminPage() {
     );
   }
 
-  const pendingCount = bookings.filter((b) => b.status === "pending").length;
+  if (sessionState === "error" || sessionState === "no-group" || !activeVenueId) {
+    return (
+      <div className={`flex flex-col items-center justify-center min-h-screen gap-4 px-8 text-center bg-[var(--background)] ${isDark ? "text-white" : "text-zinc-900"}`}>
+        <div className="w-14 h-14 rounded-2xl bg-[#FF5A00]/10 text-[#FF5A00] flex items-center justify-center">
+          <Building2 className="h-7 w-7" />
+        </div>
+        {sessionState === "error" ? (
+          <>
+            <p className="text-sm font-bold">{sessionError}</p>
+            <button onClick={loadSession} className="px-5 py-2.5 rounded-xl bg-[#FF5A00] text-white text-xs font-bold cursor-pointer">
+              Qayta urinish
+            </button>
+          </>
+        ) : (
+          <>
+            <div className="space-y-1">
+              <p className="text-base font-black">Hamkor paneli</p>
+              <p className="text-xs text-zinc-400 max-w-xs">
+                Bu akkauntda hali muassasa yo&apos;q. Restoran yoki to&apos;yxonangizni qo&apos;shing — u mijozlarga ko&apos;rinadi.
+              </p>
+            </div>
+            <button onClick={openAddVenue} className="px-5 py-3 rounded-xl bg-[#FF5A00] text-white text-xs font-bold cursor-pointer flex items-center gap-2">
+              <Plus className="h-4 w-4" />
+              Muassasa qo&apos;shish
+            </button>
+          </>
+        )}
+        <button onClick={handleLogout} className="text-xs font-bold text-zinc-400 hover:text-red-500 cursor-pointer">
+          Akkauntdan chiqish
+        </button>
+        {addVenueModal}
+        {toastMessage && (
+          <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[100] px-4 py-2.5 rounded-xl bg-primary text-white text-xs font-bold shadow-xl">
+            {toastMessage}
+          </div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div
@@ -840,31 +810,11 @@ export default function AdminPage() {
         </div>
       )}
 
-      {/* Quick Partner Session Banner if unauthenticated */}
-      {mounted && !getAccessToken() && (
-        <div className="mx-6 mt-3 px-4 py-3 rounded-2xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-between gap-3 text-xs text-amber-700 dark:text-amber-300 animate-fade-in">
-          <div className="flex items-center gap-2">
-            <span className="text-base">⚡</span>
-            <span className="font-semibold">Backend amallari uchun Hamkor hisobini faollashtiring</span>
-          </div>
-          <button
-            type="button"
-            onClick={async () => {
-              setLoadingData(true);
-              try {
-                showToast("Hamkor hisobi faollashtirilmoqda...");
-                await ensurePartnerSession();
-                showToast("Hamkor hisobi muvaffaqiyatli faollashtirildi!");
-                loadVenueData();
-              } catch {
-                showToast("Xatolik yuz berdi");
-              } finally {
-                setLoadingData(false);
-              }
-            }}
-            className="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-bold text-[11px] whitespace-nowrap shadow-sm cursor-pointer active:scale-95 transition-all"
-          >
-            Faollashtirish
+      {loadError && (
+        <div className="mx-6 mt-3 px-4 py-3 rounded-2xl bg-red-500/10 border border-red-500/20 flex items-center justify-between gap-3 text-xs text-red-500 font-semibold">
+          <span>{loadError}</span>
+          <button type="button" onClick={loadVenueData} className="px-3 py-1.5 rounded-xl bg-red-500 text-white font-bold text-[11px] cursor-pointer">
+            Qayta
           </button>
         </div>
       )}
@@ -906,7 +856,6 @@ export default function AdminPage() {
                         key={v.id}
                         onClick={() => {
                           setActiveVenueId(v.id);
-                          setPartnerName(v.name);
                           setShowVenueDropdown(false);
                           showToast(`${v.name} filialiga o'tildi`);
                         }}
@@ -925,7 +874,7 @@ export default function AdminPage() {
                     <button
                       onClick={() => {
                         setShowVenueDropdown(false);
-                        setShowAddVenueModal(true);
+                        openAddVenue();
                       }}
                       className="w-full py-2 px-3 rounded-xl bg-white/5 hover:bg-white/10 text-primary text-xs font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
                     >
@@ -986,20 +935,14 @@ export default function AdminPage() {
             </div>
             <div className="mt-2.5 flex items-baseline gap-2">
               <span className="text-3xl font-black tracking-tight">
-                {analytics?.queue_count !== undefined && analytics.queue_count > 0
-                  ? `${analytics.queue_count} ta`
-                  : bookings.length > 0
-                  ? `${bookings.length} ta`
-                  : "0 ta"}
+                {`${analytics?.queue_count ?? 0} ta`}
               </span>
               <span className="text-[10px] font-bold bg-white/15 px-1.5 py-0.5 rounded flex items-center gap-0.5">
                 Faol
               </span>
             </div>
             <p className="mt-1 text-[11px] font-semibold opacity-75">
-              {analytics?.month_bookings && analytics.month_bookings > 0
-                ? `shu oy ${analytics.month_bookings} ta bron qilingan`
-                : "mijoz bron qilgan"}
+              {`shu oy ${analytics?.month_bookings ?? 0} ta bron`}
             </p>
           </div>
 
@@ -1012,18 +955,11 @@ export default function AdminPage() {
             {(() => {
               const dayLabels = ["Dush", "Sesh", "Chor", "Pay", "Jum", "Shan", "Yak"];
               // Map backend week bars or use smooth realistic baseline if no stats yet
-              const weekData =
-                analytics?.week && analytics.week.length > 0
-                  ? analytics.week
-                  : [
-                      { weekday: 0, bookings_count: 13 },
-                      { weekday: 1, bookings_count: 75 },
-                      { weekday: 2, bookings_count: 68 },
-                      { weekday: 3, bookings_count: 12 },
-                      { weekday: 4, bookings_count: 74 },
-                      { weekday: 5, bookings_count: 120 },
-                      { weekday: 6, bookings_count: 200 },
-                    ];
+              // Every weekday shows, zero included: an empty week is a fact, not a gap to fill.
+              const weekData = dayLabels.map((_, weekday) => ({
+                weekday,
+                bookings_count: Number(analytics?.week?.find((d) => d.weekday === weekday)?.bookings_count ?? 0),
+              }));
 
               const maxCount = Math.max(...weekData.map((d) => Number(d.bookings_count) || 0), 1);
               const peakDay = weekData.reduce(
@@ -1031,11 +967,9 @@ export default function AdminPage() {
                   (Number(curr.bookings_count) || 0) > (Number(prev.bookings_count) || 0) ? curr : prev,
                 weekData[0]
               );
-              const deltaStr = analytics?.comparison?.revenue_delta_percent
-                ? Number(analytics.comparison.revenue_delta_percent) >= 0
-                  ? `+${analytics.comparison.revenue_delta_percent}%`
-                  : `${analytics.comparison.revenue_delta_percent}%`
-                : "+12%";
+              const delta = analytics?.comparison?.revenue_delta_percent;
+              const deltaStr =
+                delta === null || delta === undefined ? null : Number(delta) >= 0 ? `+${delta}%` : `${delta}%`;
 
               return (
                 <>
@@ -1045,10 +979,11 @@ export default function AdminPage() {
                         1 haftalik band qilishlar
                       </span>
                       <h3 className="text-xl font-black tracking-tight text-black dark:text-white">
-                        {dayLabels[peakDay.weekday] || "Yak"} / {peakDay.bookings_count} ta
+                        {peakDay.bookings_count > 0 ? `${dayLabels[peakDay.weekday]} / ${peakDay.bookings_count} ta` : "Bu hafta bron yo'q"}
                       </h3>
                     </div>
 
+                    {deltaStr && (
                     <div className="flex items-center gap-1.5">
                       <span className={`text-xs font-black ${isDark ? "text-white" : "text-zinc-800"}`}>
                         {deltaStr}
@@ -1061,13 +996,14 @@ export default function AdminPage() {
                         <TrendingUp className="w-3.5 h-3.5" />
                       </div>
                     </div>
+                    )}
                   </div>
 
                   <div className="mt-8 flex justify-between items-end h-[148px] px-0.5 gap-2">
                     {weekData.map((bar, i) => {
                       const count = Number(bar.bookings_count) || 0;
                       const isPeak = bar.weekday === peakDay.weekday && count > 0;
-                      const heightPx = Math.max(34, Math.round((count / maxCount) * 140));
+                      const heightPx = Math.max(24, Math.round((count / maxCount) * 140));
 
                       return (
                         <div key={i} className="flex flex-col items-center gap-2.5 flex-1">
@@ -1132,9 +1068,7 @@ export default function AdminPage() {
                   <Users className="h-4.5 w-4.5" />
                 </div>
                 <span className="text-lg font-black">
-                  {analytics?.staff_total !== undefined && analytics.staff_total > 0
-                    ? `${analytics.staff_total} ta`
-                    : `${staff.length} ta`}
+                  {`${analytics?.staff_total ?? staff.length} ta`}
                 </span>
               </div>
             </div>
@@ -1182,9 +1116,30 @@ export default function AdminPage() {
               }`}
             >
               <Layers className="h-3.5 w-3.5" />
-              <span>Stollar taxtasi ({tableBoard.length > 0 ? tableBoard.length : 8})</span>
+              <span>Stollar taxtasi ({tableBoard.length})</span>
             </button>
           </div>
+
+          {bookingsSubTab === "list" && (
+            <div className="px-6 pt-3 flex gap-2 overflow-x-auto no-scrollbar">
+              {bookingDays.map((day, idx) => (
+                <button
+                  key={day}
+                  type="button"
+                  onClick={() => setBookingsDay(day)}
+                  className={`px-3 py-1.5 rounded-full text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
+                    bookingsDay === day
+                      ? "bg-[#FF5A00] text-white shadow-sm"
+                      : isDark
+                        ? "bg-white/5 text-zinc-400 hover:text-white"
+                        : "bg-zinc-100 text-zinc-600 hover:text-zinc-900"
+                  }`}
+                >
+                  {idx === 0 ? "Bugun" : idx === 1 ? "Ertaga" : formatDate(day)}
+                </button>
+              ))}
+            </div>
+          )}
 
           <main className="flex-1 overflow-y-auto px-6 py-4 space-y-4 text-left">
             {loadingData ? (
@@ -1219,7 +1174,7 @@ export default function AdminPage() {
                         <div className="flex justify-between items-start">
                           <div>
                             <h4 className="font-black text-sm">{tableNum}-stol</h4>
-                            <span className="text-[10px] text-zinc-400 font-bold">{row.seats || 4} kishilik</span>
+                            <span className="text-[10px] text-zinc-400 font-bold">{row.seats} kishilik</span>
                           </div>
                           <span
                             className={`px-2 py-0.5 rounded-md text-[9px] font-black uppercase tracking-wider ${
@@ -1242,7 +1197,8 @@ export default function AdminPage() {
                                 if (hasBooking?.id) {
                                   handleCheckOut(hasBooking.id);
                                 } else {
-                                  showToast(`${tableNum}-stol bo'shatildi (Check-out)`);
+                                  // An open order with no booking behind it closes at the till, not here.
+                                  showToast("Bu stolda bronsiz buyurtma ochiq — uni kassada yoping");
                                 }
                               }}
                               className="w-full py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-[10px] font-bold transition-all cursor-pointer active:scale-95"
@@ -1268,27 +1224,46 @@ export default function AdminPage() {
                   })}
                 </div>
               ) : (
-                /* Empty table board state with auto-generate button */
-                <div className={`py-12 px-6 text-center rounded-3xl border border-dashed space-y-4 ${
-                  isDark ? "border-white/10 bg-white/[0.02]" : "border-zinc-200 bg-zinc-50"
-                }`}>
+                /* No tables yet: say how many of each size, the server numbers them. */
+                <form
+                  onSubmit={handleCreateTables}
+                  className={`py-8 px-6 text-center rounded-3xl border border-dashed space-y-4 ${
+                    isDark ? "border-white/10 bg-white/[0.02]" : "border-zinc-200 bg-zinc-50"
+                  }`}
+                >
                   <div className="w-12 h-12 rounded-2xl bg-primary/10 flex items-center justify-center text-primary mx-auto">
                     <Layers className="h-6 w-6" />
                   </div>
                   <div>
                     <h3 className="text-sm font-bold">Stollar hali kiritilmagan</h3>
-                    <p className="text-xs text-zinc-400 mt-1 max-w-xs mx-auto">
-                      Stollar taxtasini boshqarish uchun 8 ta stolni avtomatik generatsiya qiling.
-                    </p>
+                    <p className="text-xs text-zinc-400 mt-1 max-w-xs mx-auto">Har bir o&apos;lchamdagi stollar sonini kiriting.</p>
+                  </div>
+                  <div className="grid grid-cols-5 gap-2">
+                    {TABLE_SIZES.map((size) => (
+                      <label key={size} className="space-y-1">
+                        <span className="text-[10px] font-bold text-zinc-400 block">{size} kishilik</span>
+                        <input
+                          type="number"
+                          min={0}
+                          value={tableCounts[size] ?? ""}
+                          onChange={(e) => setTableCounts((prev) => ({ ...prev, [size]: e.target.value }))}
+                          placeholder="0"
+                          className={`w-full px-2 py-2 rounded-xl border text-sm font-bold text-center outline-none ${
+                            isDark ? "border-white/10 bg-[#1E1E1E]" : "border-zinc-200 bg-white"
+                          }`}
+                        />
+                      </label>
+                    ))}
                   </div>
                   <button
-                    type="button"
-                    onClick={handleGenerateTables}
-                    className="px-5 py-2.5 rounded-2xl bg-primary hover:bg-primary-hover text-white text-xs font-black shadow-md shadow-primary/25 cursor-pointer active:scale-95 transition-all"
+                    type="submit"
+                    disabled={isCreatingTables}
+                    className="px-5 py-2.5 rounded-2xl bg-primary hover:bg-primary-hover text-white text-xs font-black shadow-md shadow-primary/25 cursor-pointer active:scale-95 transition-all inline-flex items-center gap-2 disabled:opacity-50"
                   >
-                    8 ta stol yaratish (Auto-generate)
+                    {isCreatingTables && <Loader2 className="h-4 w-4 animate-spin" />}
+                    Stollarni yaratish
                   </button>
-                </div>
+                </form>
               )
             ) : bookings.length === 0 ? (
               <div className={`py-12 px-6 text-center rounded-3xl border border-dashed space-y-3 ${
@@ -1297,7 +1272,7 @@ export default function AdminPage() {
                 <div className="w-12 h-12 rounded-2xl bg-primary/10 flex items-center justify-center text-primary mx-auto">
                   <Calendar className="h-6 w-6" />
                 </div>
-                <h3 className="text-sm font-bold">Bugun uchun bron buyurtmalari yo'q</h3>
+                <h3 className="text-sm font-bold">Bu kunga bronlar yo&apos;q</h3>
                 <p className="text-xs text-zinc-400 max-w-xs mx-auto">
                   Mijozlar ilova orqali joy band qilganda yangi buyurtmalar shu yerda paydo bo'ladi.
                 </p>
@@ -1332,6 +1307,12 @@ export default function AdminPage() {
                         ? "Kutilmoqda"
                         : booking.status === "checked_in"
                         ? "Zalda (Check-in)"
+                        : booking.status === "cancelled"
+                        ? "Bekor qilingan"
+                        : booking.status === "completed"
+                        ? "Yakunlangan"
+                        : booking.status === "no_show"
+                        ? "Kelmagan"
                         : booking.status}
                     </span>
                   </div>
@@ -1343,7 +1324,7 @@ export default function AdminPage() {
                     </div>
                     <div>
                       <span className="text-[10px] opacity-40 block">Sana / Vaqt:</span>
-                      <span>{booking.booking_date} • {booking.start_time}</span>
+                      <span>{formatDate(booking.booking_date)} • {formatTime(booking.start_time)}</span>
                     </div>
                   </div>
 
@@ -1488,7 +1469,9 @@ export default function AdminPage() {
                   </h3>
                   <p className="text-xs text-zinc-400 max-w-xs mx-auto">
                     {selectedMenuCategory === "all"
-                      ? "Ushbu filial menyusiga yangi taom qo'shing yoki tayyor namunaviy menyuni bir marta bosish bilan yuklang."
+                      ? categories.length === 0
+                        ? "Avval toifa yarating, keyin unga taom qo'shing."
+                        : "Ushbu filial menyusiga birinchi taomni qo'shing."
                       : "Boshqa toifani tanlang yoki barcha mavjud taomlarni ko'rish uchun quyidagi tugmani bosing."}
                   </p>
                 </div>
@@ -1501,18 +1484,6 @@ export default function AdminPage() {
                   </button>
                 ) : (
                   <div className="flex flex-col sm:flex-row gap-2 w-full max-w-xs mt-2">
-                    <button
-                      onClick={handleSeedDefaultMenu}
-                      disabled={isSeedingMenu}
-                      className="flex-1 py-3 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-md transition-all cursor-pointer disabled:opacity-50"
-                    >
-                      {isSeedingMenu ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                      ) : (
-                        <Sparkles className="h-4 w-4" />
-                      )}
-                      <span>Namunaviy menyu (19 ta)</span>
-                    </button>
                     <button
                       onClick={() => setShowAddMenuModal(true)}
                       className="flex-1 py-3 px-4 rounded-xl bg-[#FF5A00] hover:bg-[#FF5A00]/90 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-md transition-all cursor-pointer"
@@ -1553,7 +1524,11 @@ export default function AdminPage() {
                   <div className="flex items-center gap-3 shrink-0">
                     <div className="text-right">
                       <span className="text-xs font-black text-[#FF5A00] block">
-                        {Number(item.effective_price || 0).toLocaleString()} {item.currency}
+                        {item.effective_price
+                          ? formatMoney(item.effective_price, item.currency)
+                          : item.price_from
+                            ? `${formatMoney(item.price_from, item.currency)} dan`
+                            : "—"}
                       </span>
                     </div>
                     <button
@@ -1571,7 +1546,7 @@ export default function AdminPage() {
 
           {/* Modal 1: Add Category Modal */}
           {showAddCategoryModal && (
-            <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-end justify-center animate-fade-in">
+            <div className="fixed inset-0 z-[60] bg-black/60 backdrop-blur-sm flex items-end justify-center animate-fade-in">
               <div className="absolute inset-0" onClick={() => setShowAddCategoryModal(false)} />
               <div
                 className={`w-full max-w-md rounded-t-[32px] px-6 pt-4 pb-8 flex flex-col gap-4 z-10 border-t relative text-left ${
@@ -1647,7 +1622,7 @@ export default function AdminPage() {
 
           {/* Modal 2: Add Menu Item Modal */}
           {showAddMenuModal && (
-            <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-end justify-center animate-fade-in">
+            <div className="fixed inset-0 z-[60] bg-black/60 backdrop-blur-sm flex items-end justify-center animate-fade-in">
               <div className="absolute inset-0" onClick={() => setShowAddMenuModal(false)} />
               <div
                 className={`w-full max-w-md rounded-t-[32px] px-6 pt-4 pb-8 flex flex-col gap-4 z-10 border-t relative text-left ${
@@ -1696,9 +1671,17 @@ export default function AdminPage() {
                         ))}
                       </select>
                     ) : (
-                      <div className="flex items-center justify-between p-3 rounded-xl border border-dashed border-amber-500/40 bg-amber-500/5 text-xs text-amber-500 font-semibold">
-                        <span>Hozircha toifalar yo'q ("Asosiy taomlar" avtomatik ochiladi)</span>
-                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowAddMenuModal(false);
+                          setShowAddCategoryModal(true);
+                        }}
+                        className="w-full flex items-center justify-between p-3 rounded-xl border border-dashed border-amber-500/40 bg-amber-500/5 text-xs text-amber-500 font-semibold cursor-pointer"
+                      >
+                        <span>Hozircha toifa yo&apos;q — avval toifa qo&apos;shing</span>
+                        <Plus className="h-4 w-4" />
+                      </button>
                     )}
                   </div>
 
@@ -1744,7 +1727,7 @@ export default function AdminPage() {
 
           {/* Modal 3: Delete Confirmation Modal */}
           {itemToDelete && (
-            <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
+            <div className="fixed inset-0 z-[60] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
               <div className="absolute inset-0" onClick={() => setItemToDelete(null)} />
               <div
                 className={`w-full max-w-sm rounded-3xl p-6 flex flex-col gap-4 z-10 border text-center ${
@@ -1811,11 +1794,10 @@ export default function AdminPage() {
           <div className="px-6 py-3 border-b border-zinc-100 dark:border-white/5 flex items-center gap-2 overflow-x-auto no-scrollbar">
             {[
               { id: "all", label: `Barchasi (${staff.length})` },
-              { id: "4", label: `Ofitsiantlar (${staff.filter((s) => s.staff_role_id === 4).length})` },
-              { id: "3", label: `Menejerlar (${staff.filter((s) => s.staff_role_id === 3).length})` },
-              { id: "5", label: `Oshpazlar (${staff.filter((s) => s.staff_role_id === 5).length})` },
-              { id: "7", label: `Qo'riqchilar (${staff.filter((s) => s.staff_role_id === 7).length})` },
-              { id: "1", label: `Egalar (${staff.filter((s) => s.staff_role_id === 1).length})` },
+              ...staffRolesPresent.map((role) => ({
+                id: String(role.id),
+                label: `${role.name} (${staff.filter((s) => s.staff_role_id === role.id).length})`,
+              })),
             ].map((tab) => (
               <button
                 key={tab.id}
@@ -1884,7 +1866,7 @@ export default function AdminPage() {
                           <span className="text-[11px] text-zinc-400 font-medium">
                             {member.role_name}
                           </span>
-                          {member.staff_role_id === 1 && (
+                          {roleById(member.staff_role_id)?.slug === "owner" && (
                             <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-500/10 text-amber-500">
                               Asosiy
                             </span>
@@ -1911,7 +1893,7 @@ export default function AdminPage() {
 
           {/* Add Staff Modal Drawer */}
           {showAddStaffModal && (
-            <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-end justify-center animate-fade-in">
+            <div className="fixed inset-0 z-[60] bg-black/60 backdrop-blur-sm flex items-end justify-center animate-fade-in">
               <div className="absolute inset-0" onClick={() => setShowAddStaffModal(false)} />
               <div
                 className={`w-full max-w-md rounded-t-[32px] px-6 pt-4 pb-8 flex flex-col gap-4 z-10 border-t relative text-left ${
@@ -1945,18 +1927,21 @@ export default function AdminPage() {
                   <div>
                     <label className="text-xs font-bold opacity-60 block mb-1">Lavozim</label>
                     <select
+                      required
                       value={newStaffRole}
                       onChange={(e) => setNewStaffRole(e.target.value)}
                       className={`w-full px-4 py-3 rounded-xl border text-sm font-bold outline-none cursor-pointer ${
                         isDark ? "border-white/10 bg-[#393939]/50 focus:border-[#FF5A00]" : "border-zinc-200 bg-zinc-50 focus:border-[#FF5A00]"
                       }`}
                     >
-                      <option value="4">Ofitsiant</option>
-                      <option value="3">Menejer</option>
-                      <option value="5">Bosh oshpaz</option>
-                      <option value="6">Oshpaz yordamchisi</option>
-                      <option value="7">Qo'riqchi</option>
-                      <option value="2">Admin</option>
+                      <option value="" disabled>
+                        Lavozimni tanlang
+                      </option>
+                      {invitableRoles.map((role) => (
+                        <option key={role.id} value={role.id}>
+                          {role.name}
+                        </option>
+                      ))}
                     </select>
                   </div>
                   <div>
@@ -1987,7 +1972,7 @@ export default function AdminPage() {
 
           {/* Created Staff Invitation Credentials Modal */}
           {createdInvitation && (
-            <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
+            <div className="fixed inset-0 z-[60] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
               <div
                 className={`w-full max-w-sm rounded-3xl p-6 flex flex-col gap-4 z-10 border relative text-left shadow-2xl ${
                   isDark ? "bg-[#2C2C2E] border-white/10" : "bg-white border-zinc-200"
@@ -2008,7 +1993,7 @@ export default function AdminPage() {
                 <div>
                   <h3 className="text-base font-black">Xodim taklifnomasi yaratildi!</h3>
                   <p className="text-xs text-zinc-400 mt-0.5">
-                    Ushbu login va parolni xodimga taqdim eting.
+                    Ushbu login va vaqtinchalik parolni xodimga bering — u kirganda o&apos;z parolini o&apos;rnatadi.
                   </p>
                 </div>
 
@@ -2057,14 +2042,6 @@ export default function AdminPage() {
 
                 <div className="flex flex-col gap-2 pt-1">
                   <button
-                    onClick={() => handleQuickActivateStaff(createdInvitation)}
-                    disabled={isSubmittingStaff}
-                    className="w-full py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-md transition-all cursor-pointer disabled:opacity-50"
-                  >
-                    {isSubmittingStaff ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
-                    <span>Darhol faollashtirish (ro'yxatga qo'shish)</span>
-                  </button>
-                  <button
                     onClick={() => {
                       const shareText = `Bazmly tizimiga xodim taklifnomasi:\nIsm: ${createdInvitation.full_name}\nLogin: ${createdInvitation.login}\nParol: ${createdInvitation.temporary_password}`;
                       navigator.clipboard.writeText(shareText);
@@ -2091,8 +2068,12 @@ export default function AdminPage() {
 
           <main className="flex-1 overflow-y-auto px-6 py-6 space-y-6 text-left">
             <div className="flex items-center gap-4 border-b border-zinc-100 dark:border-white/5 pb-5">
-              <div className="w-16 h-16 rounded-full overflow-hidden border bg-zinc-100 shadow-md">
-                <img src="/images/restaurant.png" alt="Profile" className="w-full h-full object-cover" />
+              <div className="w-16 h-16 rounded-full overflow-hidden border bg-zinc-100 shadow-md flex items-center justify-center">
+                {venueDetail?.photos[0] ? (
+                  <img src={venueDetail.photos[0].url} alt={partnerName} className="w-full h-full object-cover" />
+                ) : (
+                  <Building2 className="h-7 w-7 text-primary" />
+                )}
               </div>
               <div className="space-y-0.5">
                 <h3 className="font-extrabold text-base">{partnerName}</h3>
@@ -2101,36 +2082,33 @@ export default function AdminPage() {
             </div>
 
             <div className="space-y-4">
-              <div className="space-y-1.5">
-                <label className="text-xs font-bold opacity-60">Muassasa nomi</label>
-                <input
-                  type="text"
-                  value={partnerName}
-                  onChange={(e) => {
-                    setPartnerName(e.target.value);
-                    localStorage.setItem("fullName", e.target.value);
-                  }}
-                  className={`w-full px-4 py-3.5 rounded-xl border text-sm font-bold outline-none ${
-                    isDark ? "border-white/10 bg-[#393939]" : "border-zinc-200 bg-zinc-50"
-                  }`}
-                />
-              </div>
+              <form onSubmit={handleSaveSettings} className="space-y-4">
+                <label className="block space-y-1.5">
+                  <span className="text-xs font-bold opacity-60">Muassasa nomi</span>
+                  <input required value={settingsName} onChange={(e) => setSettingsName(e.target.value)} className={fieldClass} />
+                </label>
 
-              <div className="space-y-1.5">
-                <label className="text-xs font-bold opacity-60">Ish soatlari</label>
-                <input
-                  type="text"
-                  value={venueHours}
-                  onChange={(e) => {
-                    setVenueHours(e.target.value);
-                    localStorage.setItem("venueHours", e.target.value);
-                  }}
-                  placeholder="09:00 - 23:00"
-                  className={`w-full px-4 py-3.5 rounded-xl border text-sm font-bold outline-none ${
-                    isDark ? "border-white/10 bg-[#393939]" : "border-zinc-200 bg-zinc-50"
-                  }`}
-                />
-              </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <label className="block space-y-1.5">
+                    <span className="text-xs font-bold opacity-60">Ochiladi</span>
+                    <input type="time" value={settingsOpens} onChange={(e) => setSettingsOpens(e.target.value)} className={fieldClass} />
+                  </label>
+                  <label className="block space-y-1.5">
+                    <span className="text-xs font-bold opacity-60">Yopiladi</span>
+                    <input type="time" value={settingsCloses} onChange={(e) => setSettingsCloses(e.target.value)} className={fieldClass} />
+                  </label>
+                </div>
+                <p className="text-[11px] text-zinc-400 -mt-2">Ish vaqti haftaning barcha kunlariga qo&apos;llanadi.</p>
+
+                <button
+                  type="submit"
+                  disabled={isSavingSettings}
+                  className="w-full py-3.5 bg-[#FF5A00] text-white font-extrabold text-xs rounded-2xl shadow-lg cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50"
+                >
+                  {isSavingSettings && <Loader2 className="h-4 w-4 animate-spin" />}
+                  Saqlash
+                </button>
+              </form>
 
               <div className="pt-2">
                 <label className="text-xs font-bold opacity-60 block mb-2">Ilova mavzusi</label>
@@ -2165,7 +2143,10 @@ export default function AdminPage() {
         </div>
       )}
 
-      {/* PARTNER BOTTOM NAVIGATION BAR */}
+      {/* PARTNER BOTTOM NAVIGATION BAR — hidden under an open sheet: the sheets
+          live inside an animated tab, which caps their stacking below this bar,
+          and it was covering their submit buttons. */}
+      {!anyModalOpen && (
       <div
         className={`fixed bottom-0 left-0 right-0 z-50 h-[72px] max-w-md mx-auto border-t flex justify-between items-center px-4 transition-all duration-300 ${
           isDark
@@ -2215,10 +2196,11 @@ export default function AdminPage() {
           );
         })}
       </div>
+      )}
 
       {/* QR Check-in Modal */}
       {showCheckInModal && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center animate-fade-in p-4">
+        <div className="fixed inset-0 z-[60] bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center animate-fade-in p-4">
           <div className="absolute inset-0" onClick={() => setShowCheckInModal(false)} />
           <div
             className={`w-full max-w-md rounded-[32px] p-6 flex flex-col gap-4 z-10 border relative text-left shadow-2xl ${
@@ -2239,6 +2221,7 @@ export default function AdminPage() {
                 onClick={() => {
                   setShowCheckInModal(false);
                   setCheckInResult(null);
+                  setCheckInError(null);
                 }}
                 className="p-2 rounded-full bg-white/5 hover:bg-white/10 text-zinc-400 cursor-pointer"
               >
@@ -2253,8 +2236,13 @@ export default function AdminPage() {
                 </div>
                 <h4 className="font-extrabold text-sm text-emerald-400">{checkInResult.message}</h4>
                 <p className="text-xs text-zinc-400">
-                  Stol: <strong>{checkInResult.booking?.table_number || 4}-stol</strong> • Mehmonlar:{" "}
-                  <strong>{checkInResult.booking?.guests_count || 4} kishi</strong>
+                  {checkInResult.booking.table_number ? (
+                    <>
+                      Stol: <strong>{checkInResult.booking.table_number}-stol</strong> •{" "}
+                    </>
+                  ) : null}
+                  Mehmonlar: <strong>{checkInResult.booking.guests_count} kishi</strong> •{" "}
+                  {checkInResult.booking.contact_name}
                 </p>
                 <button
                   type="button"
@@ -2271,41 +2259,20 @@ export default function AdminPage() {
             ) : (
               <form onSubmit={handleCheckIn} className="space-y-4">
                 <div className="space-y-1.5">
-                  <label className="text-xs font-bold opacity-60">Mijoz QR Tokeni yoki Chipta kodi</label>
+                  <label className="text-xs font-bold opacity-60">Mijoz chiptasidagi QR token</label>
                   <input
                     type="text"
                     required
                     value={checkInToken}
                     onChange={(e) => setCheckInToken(e.target.value)}
-                    placeholder="Masalan: BZMLY-1-1788... yoki chipta kodi"
+                    placeholder="QR kod ostidagi token"
                     className={`w-full px-4 py-3.5 rounded-xl border text-sm font-mono font-bold outline-none ${
                       isDark ? "border-white/10 bg-[#1E1E1E]" : "border-zinc-200 bg-zinc-50"
                     }`}
                   />
                 </div>
 
-                {/* Quick Paste recent tokens from localStorage if available */}
-                {typeof window !== "undefined" && localStorage.getItem("my_booking_tokens") && (
-                  <div className="space-y-1">
-                    <span className="text-[10px] font-bold text-zinc-400 uppercase">Oxirgi chiptalar:</span>
-                    <div className="flex flex-wrap gap-1.5">
-                      {Object.entries(
-                        JSON.parse(localStorage.getItem("my_booking_tokens") || "{}")
-                      )
-                        .slice(0, 2)
-                        .map(([bId, tok]: any) => (
-                          <button
-                            type="button"
-                            key={bId}
-                            onClick={() => setCheckInToken(tok)}
-                            className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-[10px] font-mono text-primary font-bold border border-white/5 cursor-pointer"
-                          >
-                            Bron #{bId}
-                          </button>
-                        ))}
-                    </div>
-                  </div>
-                )}
+                {checkInError && <p className="text-xs font-bold text-red-500">{checkInError}</p>}
 
                 <button
                   type="submit"
@@ -2327,112 +2294,7 @@ export default function AdminPage() {
         </div>
       )}
 
-      {/* Add Venue Modal */}
-      {showAddVenueModal && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center animate-fade-in p-4">
-          <div className="absolute inset-0" onClick={() => setShowAddVenueModal(false)} />
-          <div
-            className={`w-full max-w-md rounded-[32px] p-6 flex flex-col gap-4 z-10 border relative text-left shadow-2xl ${
-              isDark ? "bg-[#2C2C2E] border-white/10" : "bg-white border-zinc-200"
-            }`}
-          >
-            <div className="flex justify-between items-center">
-              <div className="flex items-center gap-2">
-                <div className="p-2 rounded-xl bg-primary/10 text-primary">
-                  <Building2 className="h-5 w-5" />
-                </div>
-                <div>
-                  <h3 className="font-black text-base">Yangi Filial Qo'shish</h3>
-                  <p className="text-[11px] text-zinc-400 font-bold">Hamkorlik tarmog'ingiz</p>
-                </div>
-              </div>
-              <button
-                onClick={() => setShowAddVenueModal(false)}
-                className="p-2 rounded-full bg-white/5 hover:bg-white/10 text-zinc-400 cursor-pointer"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-
-            <form onSubmit={handleAddVenue} className="space-y-4">
-              <div className="space-y-1">
-                <label className="text-xs font-bold opacity-60">Filial nomi</label>
-                <input
-                  type="text"
-                  required
-                  value={newVenueName}
-                  onChange={(e) => setNewVenueName(e.target.value)}
-                  placeholder="Masalan: Rayhon Chilonzor filiali"
-                  className={`w-full px-4 py-3 rounded-xl border text-sm font-bold outline-none ${
-                    isDark ? "border-white/10 bg-[#1E1E1E]" : "border-zinc-200 bg-zinc-50"
-                  }`}
-                />
-              </div>
-
-              <div className="space-y-1">
-                <label className="text-xs font-bold opacity-60">Muassasa turi</label>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setNewVenueType("restoran")}
-                    className={`py-2.5 rounded-xl text-xs font-bold border transition-all cursor-pointer ${
-                      newVenueType === "restoran"
-                        ? "bg-primary text-white border-primary"
-                        : "border-white/10 text-zinc-400"
-                    }`}
-                  >
-                    Restoran / Kafe
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setNewVenueType("toyxona")}
-                    className={`py-2.5 rounded-xl text-xs font-bold border transition-all cursor-pointer ${
-                      newVenueType === "toyxona"
-                        ? "bg-primary text-white border-primary"
-                        : "border-white/10 text-zinc-400"
-                    }`}
-                  >
-                    To'yxona / Zal
-                  </button>
-                </div>
-              </div>
-
-              <div className="space-y-1">
-                <label className="text-xs font-bold opacity-60">Telefon raqam</label>
-                <input
-                  type="tel"
-                  value={newVenuePhone}
-                  onChange={(e) => setNewVenuePhone(e.target.value)}
-                  placeholder="+998 90 123 45 67"
-                  className={`w-full px-4 py-3 rounded-xl border text-sm font-bold outline-none ${
-                    isDark ? "border-white/10 bg-[#1E1E1E]" : "border-zinc-200 bg-zinc-50"
-                  }`}
-                />
-              </div>
-
-              <div className="space-y-1">
-                <label className="text-xs font-bold opacity-60">Umumiy o'rinlar soni (sig'im)</label>
-                <input
-                  type="number"
-                  value={newVenueSeats}
-                  onChange={(e) => setNewVenueSeats(e.target.value)}
-                  placeholder="100"
-                  className={`w-full px-4 py-3 rounded-xl border text-sm font-bold outline-none ${
-                    isDark ? "border-white/10 bg-[#1E1E1E]" : "border-zinc-200 bg-zinc-50"
-                  }`}
-                />
-              </div>
-
-              <button
-                type="submit"
-                className="w-full py-4 bg-[#FF5A00] text-white font-extrabold text-xs tracking-wider rounded-2xl shadow-lg mt-2 cursor-pointer transition-all active:scale-[0.98]"
-              >
-                Filialni ro'yxatdan o'tkazish
-              </button>
-            </form>
-          </div>
-        </div>
-      )}
+      {addVenueModal}
     </div>
   );
 }
