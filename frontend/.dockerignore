@@ -1,5 +1,6 @@
 .git/
 .gitignore
+.gitattributes
 node_modules/
 .next/
 out/
@@ -12,3 +13,7 @@ README.md
 AGENTS.md
 CLAUDE.md
 .playwright-mcp/
+docs/
+Dockerfile
+.dockerignore
+railway.json
