@@ -220,7 +220,7 @@ export interface ServiceCatalogRead {
   sort_order: number;
 }
 
-export type ServicePriceUnit = "per_event" | "per_guest" | "per_hour" | "fixed";
+export type ServicePriceUnit = "flat" | "per_guest" | "per_hour";
 
 export interface VenueServiceItemRead {
   id: number;
@@ -378,6 +378,15 @@ export interface VenueRead {
   onboarded_at: string | null;
 }
 
+/** To'yxona pricing band. A null `max_guests` is the open-ended top band. */
+export interface VenueGuestTierRead {
+  id: number;
+  min_guests: number;
+  max_guests: number | null;
+  base_price: string;
+  sort_order: number;
+}
+
 export interface VenueDetailRead {
   venue: VenueRead;
   photos: VenuePhotoRead[];
@@ -385,6 +394,7 @@ export interface VenueDetailRead {
   venue_type: VenueTypeSlug;
   working_hours: VenueWorkingHoursRead[];
   is_open_now: boolean;
+  guest_tiers: VenueGuestTierRead[];
 }
 
 export interface VenueListItem {
@@ -613,7 +623,7 @@ export interface BookingServiceRead {
   name_snapshot: string;
 }
 
-export type PriceLineType = "deposit" | "table_fee" | "menu" | "service" | "discount" | "tax";
+export type PriceLineType = "hall_rental" | "catering" | "service_logistics" | "deposit";
 
 export interface PriceLineRead {
   id: number;

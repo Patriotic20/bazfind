@@ -527,8 +527,8 @@ class BookingService:
             service = await self.venue_services.get_by_id(entry.venue_service_id)
             if service is None:
                 raise NotFoundError("Xizmat topilmadi")
-            detail = await self.venue_services.get_with_items(service.id)
-            name = f"#{service.id}" if detail is None else f"#{service.service_catalog_id}"
+            # Snapshotted so the receipt keeps the name it was sold under.
+            name = await self.venue_services.catalog_name(service)
             line_total = _money(service.price * entry.quantity)
             total += line_total
             rows.append(
