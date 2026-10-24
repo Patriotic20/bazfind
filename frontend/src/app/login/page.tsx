@@ -276,7 +276,7 @@ export default function LoginPage() {
       setFullName(fullName.trim());
       setPhone(formattedPhone);
       showToast("Ro'yxatdan muvaffaqiyatli o'tdingiz!");
-      router.push("/feed");
+      router.push("/");
     } catch (err: any) {
       setLeaving(false);
       setError(err?.message || "Ro'yxatdan o'tishda xatolik yuz berdi");
@@ -885,7 +885,7 @@ export default function LoginPage() {
         if (ownsGroup || (me && (me.role === "venue_owner" || me.role === "venue_staff"))) {
           router.push("/admin");
         } else {
-          router.push("/feed");
+          router.push("/");
         }
         return;
       } else {
