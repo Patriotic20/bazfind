@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import { CalendarDays, ChevronLeft, ChevronRight, Clock, Pencil, Users, X } from "lucide-react";
+import { CalendarDays, ChevronLeft, ChevronRight, Clock, LayoutGrid, Pencil, Users, X } from "lucide-react";
 
 import { AmountInput } from "@/components/amount-input";
 import { catalogService, ServiceCatalogRead } from "@/lib/api";
@@ -10,7 +10,7 @@ import { formatMoney } from "@/lib/format";
 /** Monday first, as the API numbers them (`weekday` 0 = Dushanba). */
 export const WEEKDAY_SHORT = ["Dush", "Sesh", "Chor", "Pay", "Jum", "Shan", "Yak"];
 
-export interface ToyxonaServiceDraft {
+export interface VenueServiceDraft {
   catalogId: number;
   name: string;
   slug: string;
@@ -20,8 +20,17 @@ export interface ToyxonaServiceDraft {
   items: { name: string; price: string }[];
 }
 
-/** Everything the to'yxona screens collect before the account exists. */
-export interface ToyxonaSetupDraft {
+/** What is being signed up: a restaurant, a to'yxona, or one of each. */
+export type SetupKind = "restoran" | "toyxona" | "both";
+
+/** Table sizes the restaurant screen asks about; `10` stands for 10 and more. */
+export const TABLE_SIZES = [2, 4, 6, 8, 10] as const;
+
+/** Everything the sign-up screens collect before the account exists. */
+export interface VenueSetupDraft {
+  /** Restaurant: how many tables of each size, digits only. */
+  tableCounts: Record<number, string>;
+  /** To'yxona: the guest range a hall booking must fall in. */
   capacityMin: string;
   capacityMax: string;
   /** `HH:MM`, or empty until chosen. */
@@ -29,10 +38,11 @@ export interface ToyxonaSetupDraft {
   closes: string;
   weekdays: number[];
   minAdvanceDays: 1 | 2 | 3;
-  services: ToyxonaServiceDraft[];
+  services: VenueServiceDraft[];
 }
 
-export const EMPTY_TOYXONA_SETUP: ToyxonaSetupDraft = {
+export const EMPTY_VENUE_SETUP: VenueSetupDraft = {
+  tableCounts: { 2: "", 4: "", 6: "", 8: "", 10: "" },
   capacityMin: "",
   capacityMax: "",
   opens: "",
@@ -53,38 +63,58 @@ export function formatWeekdays(days: number[]): string {
     : sorted.map((d) => WEEKDAY_SHORT[d]).join(", ");
 }
 
-export function isToyxonaSetupComplete(draft: ToyxonaSetupDraft): boolean {
-  return Boolean(Number(draft.capacityMax) > 0 && draft.opens && draft.closes && draft.weekdays.length);
+/** Seats across all tables, counting a 10+ table as ten. */
+export function tableSeats(draft: VenueSetupDraft): number {
+  return TABLE_SIZES.reduce((sum, size) => sum + size * (Number(draft.tableCounts[size]) || 0), 0);
+}
+
+/** `{2: 4, 4: 6}` — only the sizes that have tables, as the API takes them. */
+export function tableCountsPayload(draft: VenueSetupDraft): Record<number, number> {
+  return Object.fromEntries(
+    TABLE_SIZES.filter((size) => Number(draft.tableCounts[size]) > 0).map((size) => [size, Number(draft.tableCounts[size])]),
+  );
+}
+
+export function isVenueSetupComplete(draft: VenueSetupDraft, kind: SetupKind): boolean {
+  const restaurantReady = kind === "toyxona" || tableSeats(draft) > 0;
+  const hallReady = kind === "restoran" || Number(draft.capacityMax) > 0;
+  return Boolean(restaurantReady && hallReady && draft.opens && draft.closes && draft.weekdays.length);
 }
 
 const DASTURXON = "dasturxon_tuzash";
 
-type Screen = "hub" | "capacity" | "hours" | "days" | "services" | "catalog" | "service_form";
+type Screen = "hub" | "tables" | "capacity" | "hours" | "days" | "services" | "catalog" | "service_form";
 
 type Props = {
   isDark: boolean;
-  value: ToyxonaSetupDraft;
-  onChange: (next: ToyxonaSetupDraft) => void;
-  /** Leaves the to'yxona screens backwards, to the name-and-address step. */
+  kind: SetupKind;
+  value: VenueSetupDraft;
+  onChange: (next: VenueSetupDraft) => void;
+  /** Leaves these screens backwards, to the name-and-address step. */
   onBack: () => void;
-  /** Leaves them forwards, to the phone step. */
+  /** Leaves them forwards. */
   onDone: () => void;
-  /** Where to open: the services list when coming back from the phone step. */
+  /** Where to open: the services list when coming back from a later step. */
   initialScreen?: "hub" | "services";
 };
 
 /**
- * The to'yxona half of partner sign-up: hall size, hours, working days and the
- * minimum notice on one screen, then the extra services with their prices.
+ * The middle of partner sign-up: seats, hours, working days and the minimum
+ * notice on one screen, then — for a to'yxona — the extra services and their
+ * prices. A restaurant counts its tables by size; a to'yxona gives the guest
+ * range of its hall; "both" asks for each.
  *
  * Nothing here talks to the API except the service catalogue: the account does
  * not exist yet, so the draft is handed up and written once at the end.
  */
-export function ToyxonaSetup({ isDark, value, onChange, onBack, onDone, initialScreen = "hub" }: Props) {
+export function VenueSetup({ isDark, kind, value, onChange, onBack, onDone, initialScreen = "hub" }: Props) {
   const [screen, setScreen] = useState<Screen>(initialScreen);
   const [error, setError] = useState("");
+  const hasRestaurant = kind !== "toyxona";
+  const hasHall = kind !== "restoran";
 
   // Sub-screen drafts, so backing out of one does not change the hub.
+  const [tables, setTables] = useState<Record<number, string>>(value.tableCounts);
   const [capMin, setCapMin] = useState(value.capacityMin);
   const [capMax, setCapMax] = useState(value.capacityMax);
   const [opens, setOpens] = useState(value.opens);
@@ -184,14 +214,25 @@ export function ToyxonaSetup({ isDark, value, onChange, onBack, onDone, initialS
         {header("Vaqt & Zal sozlamalari", onBack)}
         {errorBox}
         <div className="space-y-5 text-left">
-          <div>
-            <span className={labelClass}>To&apos;yxonadagi umumiy joylar sonini belgilang</span>
-            {pickerRow(capacityText, "00", () => {
-              setCapMin(value.capacityMin);
-              setCapMax(value.capacityMax);
-              go("capacity");
-            })}
-          </div>
+          {hasRestaurant && (
+            <div>
+              <span className={labelClass}>Restorandagi umumiy joylar sonini kiriting</span>
+              {pickerRow(tableSeats(value) ? `${tableSeats(value)} ta` : "", "00", () => {
+                setTables(value.tableCounts);
+                go("tables");
+              })}
+            </div>
+          )}
+          {hasHall && (
+            <div>
+              <span className={labelClass}>To&apos;yxonadagi umumiy joylar sonini belgilang</span>
+              {pickerRow(capacityText, "00", () => {
+                setCapMin(value.capacityMin);
+                setCapMax(value.capacityMax);
+                go("capacity");
+              })}
+            </div>
+          )}
           <div>
             <span className={labelClass}>Ish vaqtini belgilang</span>
             {pickerRow(hoursText, "00 : 00", () => {
@@ -240,7 +281,42 @@ export function ToyxonaSetup({ isDark, value, onChange, onBack, onDone, initialS
           </div>
         </div>
       </>,
-      primaryButton("Keyingisi", isToyxonaSetupComplete(value), () => go("services")),
+      primaryButton("Keyingisi", isVenueSetupComplete(value, kind), () => (hasHall ? go("services") : onDone())),
+    );
+  }
+
+  // --- restaurant tables -----------------------------------------------------
+
+  if (screen === "tables") {
+    const draft = { ...value, tableCounts: tables };
+    return layout(
+      <>
+        {header("Stollar", () => go("hub"))}
+        {errorBox}
+        <div className="space-y-5 text-left">
+          {TABLE_SIZES.map((size) => (
+            <label key={size} className="block">
+              <span className={labelClass}>{`${size === 10 ? "10+" : size} kishilik sig'imdagi stollar soni`}</span>
+              <div className={`${fieldClass} flex items-center gap-2`}>
+                <AmountInput
+                  value={tables[size] ?? ""}
+                  onChange={(digits) => setTables((prev) => ({ ...prev, [size]: digits }))}
+                  placeholder="0"
+                  className="flex-1 min-w-0 bg-transparent outline-none"
+                />
+                <LayoutGrid className={`h-5 w-5 ${muted}`} />
+              </div>
+            </label>
+          ))}
+          <p className={`text-xs font-bold ${isDark ? "text-white/70" : "text-zinc-600"}`}>
+            Jami: {tableSeats(draft)} ta joy
+          </p>
+        </div>
+      </>,
+      primaryButton("Keyingisi", tableSeats(draft) > 0, () => {
+        onChange(draft);
+        go("hub");
+      }),
     );
   }
 
@@ -469,7 +545,7 @@ export function ToyxonaSetup({ isDark, value, onChange, onBack, onDone, initialS
       setError("Har bir taomning nomi va narxini kiriting!");
       return;
     }
-    const draft: ToyxonaServiceDraft = {
+    const draft: VenueServiceDraft = {
       catalogId: formService.id,
       name: formService.name,
       slug: formService.slug,

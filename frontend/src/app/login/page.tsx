@@ -39,7 +39,15 @@ import { useAuth } from "@/contexts/AuthContext";
 import { PhoneInput } from "@/components/phone-input";
 import { AmountInput } from "@/components/amount-input";
 import { PasswordInput } from "@/components/password-input";
-import { EMPTY_TOYXONA_SETUP, ToyxonaSetup, ToyxonaSetupDraft, isToyxonaSetupComplete } from "@/components/toyxona-setup";
+import {
+  EMPTY_VENUE_SETUP,
+  SetupKind,
+  VenueSetup,
+  VenueSetupDraft,
+  isVenueSetupComplete,
+  tableCountsPayload,
+  tableSeats,
+} from "@/components/venue-setup";
 import { formatPhone, toE164 } from "@/lib/phone";
 import {
   authService,
@@ -66,7 +74,7 @@ type Step =
   | "region"
   | "district"
   | "partner_hours"
-  | "toyxona_setup"
+  | "venue_setup"
   | 4
   | "partner_price"
   | 5
@@ -107,14 +115,6 @@ const FAQS = [
   }
 ];
 
-/** `"09:00 - 23:00"` as two `HH:MM` strings; null when it is not that shape. */
-function parseHours(value: string): { opens: string; closes: string } | null {
-  const match = value.match(/^\s*(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})\s*$/);
-  if (!match) return null;
-  const pad = (h: string) => h.padStart(2, "0");
-  return { opens: `${pad(match[1])}:${match[2]}`, closes: `${pad(match[3])}:${match[4]}` };
-}
-
 export default function LoginPage() {
   const router = useRouter();
   const { theme, toggleTheme } = useTheme();
@@ -143,7 +143,7 @@ export default function LoginPage() {
   const [role, setRole] = useState<"customer" | "partner">("customer");
   
   // New login/wizard states
-  const [accountType, setAccountType] = useState<"customer" | "restaurant" | "toyxona">("customer");
+  const [accountType, setAccountType] = useState<"customer" | "restaurant" | "toyxona" | "both">("customer");
   const [username, setUsername] = useState("");
   // Customers and owners sign in by phone, staff by the login the owner issued.
   // Two modes rather than one guessing field, so the phone can keep +998 fixed.
@@ -156,10 +156,11 @@ export default function LoginPage() {
   const [partnerHouse, setPartnerHouse] = useState("");
   const [venueCapacity, setVenueCapacity] = useState("");
   const [venuePrice, setVenuePrice] = useState("");
-  // A to'yxona replaces the hours, capacity and price steps with its own
-  // screens; what they collect is written once the account exists.
-  const [toyxonaSetup, setToyxonaSetup] = useState<ToyxonaSetupDraft>(EMPTY_TOYXONA_SETUP);
-  const [toyxonaEntry, setToyxonaEntry] = useState<"hub" | "services">("hub");
+  // Seats, hours, days, notice and (for a to'yxona) services, collected on the
+  // setup screens and written once the account exists.
+  const [venueSetup, setVenueSetup] = useState<VenueSetupDraft>(EMPTY_VENUE_SETUP);
+  const [setupEntry, setSetupEntry] = useState<"hub" | "services">("hub");
+  const setupKind: SetupKind = accountType === "toyxona" ? "toyxona" : accountType === "both" ? "both" : "restoran";
   const [venueImages, setVenueImages] = useState<string[]>([]);
   const [activePartnerField, setActivePartnerField] = useState<"name" | "hours" | "capacity" | "price" | "phone" | "password" | "">("name");
   const [isNumLayout, setIsNumLayout] = useState(false);
@@ -767,24 +768,8 @@ export default function LoginPage() {
         setError("Ko'cha va uy raqamini kiriting!");
         return;
       }
-      if (accountType === "toyxona") {
-        setToyxonaEntry("hub");
-        setStep("toyxona_setup");
-        return;
-      }
-      setStep("partner_hours");
-    } else if (step === "partner_hours") {
-      if (!parseHours(venueHours)) {
-        setError("Ish vaqtini \"09:00 - 23:00\" ko'rinishida kiriting!");
-        return;
-      }
-      setStep(4);
-    } else if (step === 4) {
-      if (!venueCapacity.trim()) {
-        setError("Sig'imni kiriting!");
-        return;
-      }
-      setStep("partner_price");
+      setSetupEntry("hub");
+      setStep("venue_setup");
     } else if (step === "partner_price") {
       if (!venuePrice.trim()) {
         setError("Narxni kiriting!");
@@ -832,18 +817,16 @@ export default function LoginPage() {
       setStep(3);
     } else if (step === "district") {
       setStep("region");
-    } else if (step === "partner_hours") {
-      setStep(3);
-    } else if (step === 4) {
-      setStep("partner_hours");
     } else if (step === "partner_price") {
-      setStep(4);
+      // A restaurant's setup ends at the hub; "both" ends at the services.
+      setSetupEntry(setupKind === "both" ? "services" : "hub");
+      setStep("venue_setup");
     } else if (step === 5) {
       setStep("partner_price");
     } else if (step === 6) {
-      if (accountType === "toyxona") {
-        setToyxonaEntry("services");
-        setStep("toyxona_setup");
+      if (setupKind === "toyxona") {
+        setSetupEntry("services");
+        setStep("venue_setup");
       } else {
         setStep("partner_price");
       }
@@ -935,19 +918,15 @@ export default function LoginPage() {
   };
 
   /**
-   * The account, the chain and its first branch, in that order — each step
-   * stops on the server's refusal instead of carrying on as if it worked.
+   * The account, the chain and its branches, in that order — each step stops on
+   * the server's refusal instead of carrying on as if it worked. "Both" is two
+   * branches of one chain: a restaurant and a to'yxona are booked differently
+   * (a table against the whole hall), so one venue cannot be both.
    */
   const handleCompletePartnerRegistration = async () => {
     setError("");
     const district = partnerDistricts.find((d) => d.id === selectedPartnerDistrictId);
-    const isToyxona = accountType === "toyxona";
-    const hours = isToyxona
-      ? toyxonaSetup.opens && toyxonaSetup.closes
-        ? { opens: toyxonaSetup.opens, closes: toyxonaSetup.closes }
-        : null
-      : parseHours(venueHours);
-    if (!district || !hours || (isToyxona && !isToyxonaSetupComplete(toyxonaSetup))) {
+    if (!district || !isVenueSetupComplete(venueSetup, setupKind)) {
       setError("Manzil yoki ish vaqti to'liq emas — orqaga qaytib tekshiring.");
       return;
     }
@@ -957,59 +936,83 @@ export default function LoginPage() {
       return;
     }
     const [firstName, ...rest] = fullName.trim().split(/\s+/);
-    const venueKind = isToyxona ? "toyxona" : "restoran";
-    const size = Number(venueCapacity) || null;
+    const hasRestaurant = setupKind !== "toyxona";
+    const hasHall = setupKind !== "restoran";
+    const name = venueName.trim();
+    const common = {
+      district_id: district.id,
+      street: partnerStreet.trim(),
+      house_number: partnerHouse.trim(),
+      // The district's own point until there is a map picker.
+      latitude: Number(district.latitude),
+      longitude: Number(district.longitude),
+      phone: formattedPhone,
+      min_advance_booking_days: venueSetup.minAdvanceDays,
+    };
+    const restaurantBranch = {
+      ...common,
+      name,
+      venue_type: "restoran" as const,
+      total_seats: tableSeats(venueSetup),
+      base_price: Number(venuePrice.replace(/\D/g, "")) || null,
+    };
     // A to'yxona is priced by its services, not by an average per guest.
-    const price = isToyxona ? null : Number(venuePrice.replace(/\D/g, "")) || null;
-    const openDays = isToyxona ? toyxonaSetup.weekdays : [0, 1, 2, 3, 4, 5, 6];
+    const hallBranch = {
+      ...common,
+      name: setupKind === "both" ? `${name} (To'yxona)` : name,
+      venue_type: "toyxona" as const,
+      capacity_min: Number(venueSetup.capacityMin) || null,
+      capacity_max: Number(venueSetup.capacityMax),
+      base_price: null,
+    };
+    const week = {
+      days: Array.from({ length: 7 }, (_, weekday) =>
+        venueSetup.weekdays.includes(weekday)
+          ? { weekday, opens_at: `${venueSetup.opens}:00`, closes_at: `${venueSetup.closes}:00`, is_closed: false }
+          : { weekday, opens_at: null, closes_at: null, is_closed: true },
+      ),
+    };
 
     setLoading(true);
     try {
       setLeaving(true);
       await register({ phone: formattedPhone, password: password.trim(), first_name: firstName, last_name: rest.join(" ") });
       const created = await partnerService.createGroupWithBranch({
-        group: { name: venueName.trim(), primary_venue_type: venueKind },
-        branch: {
-          name: venueName.trim(),
-          venue_type: venueKind,
-          district_id: district.id,
-          street: partnerStreet.trim(),
-          house_number: partnerHouse.trim(),
-          // The district's own point until there is a map picker.
-          latitude: Number(district.latitude),
-          longitude: Number(district.longitude),
-          phone: formattedPhone,
-          base_price: price,
-          ...(isToyxona
-            ? {
-                capacity_min: Number(toyxonaSetup.capacityMin) || null,
-                capacity_max: Number(toyxonaSetup.capacityMax),
-                min_advance_booking_days: toyxonaSetup.minAdvanceDays,
-              }
-            : { total_seats: size }),
-        },
+        group: { name, primary_venue_type: hasRestaurant ? "restoran" : "toyxona" },
+        branch: hasRestaurant ? restaurantBranch : hallBranch,
       });
-      const venueId = created.branches[0].id;
-      await partnerService.updateWorkingHours(venueId, {
-        days: Array.from({ length: 7 }, (_, weekday) =>
-          openDays.includes(weekday)
-            ? { weekday, opens_at: `${hours.opens}:00`, closes_at: `${hours.closes}:00`, is_closed: false }
-            : { weekday, opens_at: null, closes_at: null, is_closed: true },
-        ),
-      });
-      for (const [index, service] of (isToyxona ? toyxonaSetup.services : []).entries()) {
-        await catalogService.createVenueService(
-          {
-            service_catalog_id: service.catalogId,
-            price: Number(service.price),
-            sort_order: index,
-            items: service.items.map((item, i) => ({ name: item.name, price: Number(item.price), sort_order: i })),
-          },
-          venueId,
-          created.group.id,
-        );
+      const groupId = created.group.id;
+      const firstId = created.branches[0].id;
+      const restaurantId = hasRestaurant ? firstId : null;
+      const hallId = !hasHall
+        ? null
+        : hasRestaurant
+          ? (await partnerService.createVenue(hallBranch, groupId)).id
+          : firstId;
+
+      for (const venueId of [restaurantId, hallId]) {
+        if (venueId) await partnerService.updateWorkingHours(venueId, week);
       }
-      await partnerService.updateVenue(venueId, { status: "active" });
+      if (restaurantId) {
+        await partnerService.createTablesBulk(restaurantId, { counts: tableCountsPayload(venueSetup) });
+      }
+      if (hallId) {
+        for (const [index, service] of venueSetup.services.entries()) {
+          await catalogService.createVenueService(
+            {
+              service_catalog_id: service.catalogId,
+              price: Number(service.price),
+              sort_order: index,
+              items: service.items.map((item, i) => ({ name: item.name, price: Number(item.price), sort_order: i })),
+            },
+            hallId,
+            groupId,
+          );
+        }
+      }
+      for (const venueId of [restaurantId, hallId]) {
+        if (venueId) await partnerService.updateVenue(venueId, { status: "active" });
+      }
       showToast("Ro'yxatdan muvaffaqiyatli o'tdingiz!");
       router.push("/admin");
     } catch (err) {
@@ -2276,6 +2279,28 @@ export default function LoginPage() {
                                 <div className="w-5 h-5 rounded-full border border-zinc-350 dark:border-white/25 bg-transparent shrink-0" />
                               )}
                             </button>
+
+                            {/* Barchasi: a restaurant and a to'yxona, as two branches of one chain */}
+                            <button
+                              type="button"
+                              onClick={() => setAccountType("both")}
+                              className={`py-2 px-4 rounded-full border flex items-center gap-2 text-sm font-bold transition-all cursor-pointer ${
+                                accountType === "both"
+                                  ? "bg-[#FF5A00] border-[#FF5A00] text-white shadow-md shadow-[#FF5A00]/15"
+                                  : isDark
+                                    ? "bg-transparent border-white/25 text-white/80 hover:bg-white/5"
+                                    : "bg-white border-zinc-200 text-zinc-800 hover:bg-zinc-50"
+                              }`}
+                            >
+                              <span>Barchasi</span>
+                              {accountType === "both" ? (
+                                <div className="w-5 h-5 rounded-full bg-white flex items-center justify-center shrink-0">
+                                  <X className="h-3 w-3 text-[#FF5A00] stroke-[3px]" />
+                                </div>
+                              ) : (
+                                <div className="w-5 h-5 rounded-full border border-zinc-350 dark:border-white/25 bg-transparent shrink-0" />
+                              )}
+                            </button>
                           </div>
                         </div>
 
@@ -2460,157 +2485,24 @@ export default function LoginPage() {
                   </div>
                 )}
 
-                {/* Step "partner_hours": Ish tartibi */}
-                {step === "partner_hours" && (
-                  <div className="space-y-4 flex-1 flex flex-col justify-between animate-scale-up">
-                    <div className="space-y-4">
-                      <div className="space-y-1.5 text-left">
-                        <div className="flex items-center gap-1.5 -ml-2">
-                          <button
-                            type="button"
-                            onClick={handleBackStep}
-                            className="p-1 rounded-lg transition-colors cursor-pointer text-zinc-950 dark:text-white hover:opacity-75"
-                          >
-                            <ChevronLeft className="h-7 w-7 stroke-[2.5px]" />
-                          </button>
-                          <h2 className={`text-2xl font-extrabold ${isDark ? "text-white" : "text-black"}`}>
-                            Ish tartibi (soat)
-                          </h2>
-                        </div>
-                        <p className={`text-xs ${isDark ? "text-white/60" : "text-zinc-500"} pl-7`}>
-                          Ishlash soatlarini kiriting (masalan: 09:00 - 23:00)
-                        </p>
-                      </div>
-
-                      {error && (
-                        <div className="rounded-xl bg-red-500/10 border border-red-500/20 p-3 text-xs text-red-400 text-center font-bold">
-                          {error}
-                        </div>
-                      )}
-
-                      <div className="space-y-4 text-left">
-                        <input
-                          type="text"
-                          value={venueHours}
-                          onChange={(e) => setVenueHours(e.target.value)}
-                          placeholder="09:00 - 23:00"
-                          className={`w-full px-4 py-3.5 rounded-2xl border transition-all outline-none ${
-                            isDark 
-                              ? "bg-[#2C2C2E]/60 border-white/10 text-white focus:border-[#FF5A00]" 
-                              : "bg-white border-zinc-200 text-black focus:border-[#FF5A00]"
-                          } text-sm font-bold tracking-wide`}
-                        />
-                      </div>
-                    </div>
-
-                    <div className="space-y-4">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (!venueHours.trim()) {
-                            setError("Iltimos ish tartibini kiriting!");
-                            return;
-                          }
-                          setError("");
-                          handleNextStep();
-                        }}
-                        className={`w-full py-4 rounded-full font-bold text-sm tracking-wide transition-all active:scale-98 shadow-lg ${
-                          venueHours.trim()
-                            ? "bg-[#FF5A00] text-white shadow-[#FF5A00]/25 cursor-pointer hover:bg-[#E04F00]"
-                            : isDark
-                              ? "bg-white/10 text-white/30 cursor-not-allowed"
-                              : "bg-[#FF5A00]/20 text-[#FF5A00]/45 cursor-not-allowed"
-                        }`}
-                      >
-                        Keyingisi
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                {step === "toyxona_setup" && (
-                  <ToyxonaSetup
+                {/* Seats, hours, days and notice — and a to'yxona's services */}
+                {step === "venue_setup" && (
+                  <VenueSetup
                     isDark={isDark}
-                    value={toyxonaSetup}
-                    onChange={setToyxonaSetup}
-                    initialScreen={toyxonaEntry}
+                    kind={setupKind}
+                    value={venueSetup}
+                    onChange={setVenueSetup}
+                    initialScreen={setupEntry}
                     onBack={() => {
                       setError("");
                       setStep(3);
                     }}
                     onDone={() => {
                       setError("");
-                      setStep(6);
+                      // A restaurant still gives its average bill; a to'yxona does not.
+                      setStep(setupKind === "toyxona" ? 6 : "partner_price");
                     }}
                   />
-                )}
-
-                {/* Step 4: Venue Capacity */}
-                {step === 4 && (
-                  <div className="space-y-4 flex-1 flex flex-col justify-between animate-scale-up">
-                    <div className="space-y-4">
-                      <div className="space-y-1.5 text-left">
-                        <div className="flex items-center gap-1.5 -ml-2">
-                          <button
-                            type="button"
-                            onClick={handleBackStep}
-                            className="p-1 rounded-lg transition-colors cursor-pointer text-zinc-950 dark:text-white hover:opacity-75"
-                          >
-                            <ChevronLeft className="h-7 w-7 stroke-[2.5px]" />
-                          </button>
-                          <h2 className={`text-2xl font-extrabold ${isDark ? "text-white" : "text-black"}`}>
-                            Mijozlar sig'imi
-                          </h2>
-                        </div>
-                        <p className={`text-xs ${isDark ? "text-white/60" : "text-zinc-500"} pl-7`}>
-                          Muassasangizning umumiy sig'imini belgilang (kishi soni)
-                        </p>
-                      </div>
-
-                      {error && (
-                        <div className="rounded-xl bg-red-500/10 border border-red-500/20 p-3 text-xs text-red-400 text-center font-bold">
-                          {error}
-                        </div>
-                      )}
-
-                      <div className="space-y-4 text-left">
-                        <input
-                          type="number"
-                          value={venueCapacity}
-                          onChange={(e) => setVenueCapacity(e.target.value)}
-                          placeholder="Sig'imi (masalan: 150)"
-                          className={`w-full px-4 py-3.5 rounded-2xl border transition-all outline-none ${
-                            isDark 
-                              ? "bg-[#2C2C2E]/60 border-white/10 text-white focus:border-[#FF5A00]" 
-                              : "bg-white border-zinc-200 text-black focus:border-[#FF5A00]"
-                          } text-sm font-bold tracking-wide`}
-                        />
-                      </div>
-                    </div>
-
-                    <div className="space-y-4">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (!venueCapacity.trim()) {
-                            setError("Iltimos mijozlar sig'imini kiriting!");
-                            return;
-                          }
-                          setError("");
-                          handleNextStep();
-                        }}
-                        className={`w-full py-4 rounded-full font-bold text-sm tracking-wide transition-all active:scale-98 shadow-lg ${
-                          venueCapacity.trim()
-                            ? "bg-[#FF5A00] text-white shadow-[#FF5A00]/25 cursor-pointer hover:bg-[#E04F00]"
-                            : isDark
-                              ? "bg-white/10 text-white/30 cursor-not-allowed"
-                              : "bg-[#FF5A00]/20 text-[#FF5A00]/45 cursor-not-allowed"
-                        }`}
-                      >
-                        Keyingisi
-                      </button>
-                    </div>
-                  </div>
                 )}
 
                 {/* Step "partner_price": Venue Price */}
