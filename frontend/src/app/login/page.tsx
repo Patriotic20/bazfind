@@ -39,7 +39,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { PhoneInput } from "@/components/phone-input";
 import { AmountInput } from "@/components/amount-input";
 import { PasswordInput } from "@/components/password-input";
-import { formatPhone, phoneDigits, toE164 } from "@/lib/phone";
+import { formatPhone, toE164 } from "@/lib/phone";
 import {
   authService,
   userService,
@@ -137,6 +137,9 @@ export default function LoginPage() {
   // New login/wizard states
   const [accountType, setAccountType] = useState<"customer" | "restaurant" | "toyxona">("customer");
   const [username, setUsername] = useState("");
+  // Customers and owners sign in by phone, staff by the login the owner issued.
+  // Two modes rather than one guessing field, so the phone can keep +998 fixed.
+  const [loginMode, setLoginMode] = useState<"phone" | "login">("phone");
   const [password, setPassword] = useState("");
   const [venueName, setVenueName] = useState("");
   const [venueType, setVenueType] = useState<"restaurant" | "toyxona">("restaurant");
@@ -853,15 +856,13 @@ export default function LoginPage() {
     setError("");
 
     if (!username.trim() || !password.trim()) {
-      setError("Login va parolni to'liq kiriting!");
+      setError(loginMode === "phone" ? "Telefon va parolni to'liq kiriting!" : "Login va parolni to'liq kiriting!");
       return;
     }
 
     setLoading(true);
     try {
-      const isPhoneNumber = /^\d+$/.test(username.trim());
-
-      if (isPhoneNumber) {
+      if (loginMode === "phone") {
         const phoneToLogin = toE164(username);
         if (!phoneToLogin) {
           setError("Telefon raqamini to'liq kiriting!");
@@ -1913,38 +1914,72 @@ export default function LoginPage() {
                       )}
 
                       <div className="space-y-3">
-                        {/* Username Input */}
-                        <div className="rounded-xl border border-foreground/10 dark:border-white/10 bg-foreground/5 dark:bg-white/5 p-3.5 focus-within:ring-2 focus-within:ring-[#FF5A00]/50 transition-all">
-                          <label className="block text-[10px] font-bold text-foreground/45 dark:text-white/40 uppercase tracking-wider mb-1">
-                            Foydalanuvchi nomi yoki telefon
-                          </label>
-                          <input
-                            type="text"
-                            required
-                            placeholder="+998 (99) 000 00 00 yoki login"
-                            value={/^[+\d(]/.test(username) ? formatPhone(username) : username}
-                            onChange={(e) => {
-                              // A number is kept as its nine digits and shown masked;
-                              // a staff login is kept as typed.
-                              const typed = e.target.value;
-                              setUsername(/^[+\d(]/.test(typed) ? phoneDigits(typed) : typed);
-                            }}
-                            className="block w-full border-0 bg-transparent p-0 text-foreground dark:text-white font-bold outline-none placeholder-foreground/20 dark:placeholder-white/20 focus:ring-0 text-sm"
-                          />
+                        <div className="grid grid-cols-2 gap-1 p-1 rounded-xl bg-foreground/5 dark:bg-white/5">
+                          {([
+                            { mode: "phone", label: "Telefon" },
+                            { mode: "login", label: "Login" },
+                          ] as const).map((tab) => (
+                            <button
+                              key={tab.mode}
+                              type="button"
+                              onClick={() => {
+                                if (tab.mode === loginMode) return;
+                                setLoginMode(tab.mode);
+                                setUsername("");
+                                setError("");
+                              }}
+                              className={`py-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                                loginMode === tab.mode
+                                  ? "bg-[#FF5A00] text-white shadow"
+                                  : "text-foreground/60 dark:text-white/60"
+                              }`}
+                            >
+                              {tab.label}
+                            </button>
+                          ))}
                         </div>
 
-                        {/* Password Input */}
-                        <div className="rounded-xl border border-foreground/10 dark:border-white/10 bg-foreground/5 dark:bg-white/5 p-3.5 focus-within:ring-2 focus-within:ring-[#FF5A00]/50 transition-all">
-                          <label className="block text-[10px] font-bold text-foreground/45 dark:text-white/40 uppercase tracking-wider mb-1">
-                            Parol
+                        <div className="space-y-1.5 text-left">
+                          <label className="block text-xs font-bold text-foreground/60 dark:text-white/60">
+                            {loginMode === "phone" ? "Telefon raqam" : "Login"}
                           </label>
-                          <PasswordInput
-                            required
-                            placeholder="••••••"
-                            value={password}
-                            onChange={(e) => setPassword(e.target.value)}
-                            className="block w-full border-0 bg-transparent p-0 text-foreground dark:text-white font-bold outline-none placeholder-foreground/20 dark:placeholder-white/20 focus:ring-0 text-sm"
-                          />
+                          {loginMode === "phone" ? (
+                            <div className="rounded-xl border border-foreground/10 dark:border-white/10 bg-foreground/5 dark:bg-white/5 px-3.5 py-3 focus-within:ring-2 focus-within:ring-[#FF5A00]/50 transition-all flex items-center gap-2">
+                              <img src="/icons/uzb.png" alt="UZ" className="w-5 h-5 rounded-full object-cover shrink-0" />
+                              <PhoneInput
+                                required
+                                value={username}
+                                onChange={setUsername}
+                                className="flex-1 text-sm font-bold text-foreground dark:text-white"
+                              />
+                            </div>
+                          ) : (
+                            <div className="rounded-xl border border-foreground/10 dark:border-white/10 bg-foreground/5 dark:bg-white/5 px-3.5 py-3 focus-within:ring-2 focus-within:ring-[#FF5A00]/50 transition-all">
+                              <input
+                                type="text"
+                                required
+                                autoCapitalize="none"
+                                autoCorrect="off"
+                                placeholder="Masalan: bzquhcbq24"
+                                value={username}
+                                onChange={(e) => setUsername(e.target.value.trim())}
+                                className="block w-full border-0 bg-transparent p-0 text-foreground dark:text-white font-bold outline-none placeholder-foreground/20 dark:placeholder-white/20 focus:ring-0 text-sm"
+                              />
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="space-y-1.5 text-left">
+                          <label className="block text-xs font-bold text-foreground/60 dark:text-white/60">Parol</label>
+                          <div className="rounded-xl border border-foreground/10 dark:border-white/10 bg-foreground/5 dark:bg-white/5 px-3.5 py-3 focus-within:ring-2 focus-within:ring-[#FF5A00]/50 transition-all">
+                            <PasswordInput
+                              required
+                              placeholder="••••••"
+                              value={password}
+                              onChange={(e) => setPassword(e.target.value)}
+                              className="block w-full border-0 bg-transparent p-0 text-foreground dark:text-white font-bold outline-none placeholder-foreground/20 dark:placeholder-white/20 focus:ring-0 text-sm"
+                            />
+                          </div>
                         </div>
                       </div>
                     </div>
