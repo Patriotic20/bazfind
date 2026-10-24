@@ -403,8 +403,18 @@ export default function ToyxonaFlowModal({ isOpen, onClose, detail, theme = "lig
                         onClick={() =>
                           setChosenServices((prev) => {
                             const next = new Set(prev);
-                            if (next.has(s.id)) next.delete(s.id);
-                            else next.add(s.id);
+                            if (next.has(s.id)) {
+                              next.delete(s.id);
+                            } else {
+                              // Standart or premium, not both: picking one table
+                              // spread replaces the other.
+                              if (s.slug?.startsWith("dasturxon")) {
+                                for (const other of services) {
+                                  if (other.id !== s.id && other.slug?.startsWith("dasturxon")) next.delete(other.id);
+                                }
+                              }
+                              next.add(s.id);
+                            }
                             return next;
                           })
                         }

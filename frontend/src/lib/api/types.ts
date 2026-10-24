@@ -240,6 +240,8 @@ export interface VenueServiceRead {
   venue_group_id: number;
   venue_id: number | null;
   service_catalog_id: number;
+  /** The catalogue key; every `dasturxon*` slug is one of the table spreads. */
+  slug: string;
   name: string;
   price: string;
   currency: string;
@@ -247,6 +249,14 @@ export interface VenueServiceRead {
   is_active: boolean;
   sort_order: number;
   items?: VenueServiceItemRead[];
+}
+
+/** Only the fields sent change; `items`, when sent, replaces the whole list. */
+export interface VenueServiceUpdate {
+  price?: number | string;
+  is_active?: boolean;
+  sort_order?: number;
+  items?: VenueServiceItemCreate[];
 }
 
 export interface VenueServiceCreate {

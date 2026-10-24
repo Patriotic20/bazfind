@@ -66,6 +66,7 @@ import { PhoneInput } from "@/components/phone-input";
 import { formatPhone, toE164 } from "@/lib/phone";
 import { shrinkImage } from "@/lib/image";
 import { AmountInput } from "@/components/amount-input";
+import { VenueServicesEditor } from "@/components/venue-services-editor";
 
 /** The API's limit too (`MAX_VENUE_PHOTOS` in the venues schemas). */
 const MAX_VENUE_PHOTOS = 5;
@@ -183,6 +184,7 @@ export default function AdminPage() {
   const [isSavingStaff, setIsSavingStaff] = useState(false);
   const [resetCredentials, setResetCredentials] = useState<StaffPasswordReset | null>(null);
   const [isSavingPhotos, setIsSavingPhotos] = useState(false);
+  const [servicesSheetOpen, setServicesSheetOpen] = useState(false);
   const [staffRoleFilter, setStaffRoleFilter] = useState<string | "all">("all");
 
   // Menu
@@ -784,6 +786,7 @@ export default function AdminPage() {
     itemToDelete !== null ||
     showAddStaffModal ||
     editingStaff !== null ||
+    servicesSheetOpen ||
     createdInvitation !== null ||
     showCheckInModal ||
     showAddVenueModal;
@@ -2454,6 +2457,19 @@ export default function AdminPage() {
               </div>
               <p className="text-[11px] text-zinc-400">Birinchi rasm muqova bo&apos;lib, mijozlarga ro&apos;yxatda ko&apos;rinadi.</p>
             </div>
+
+            {venueDetail?.venue.venue_type === "toyxona" && group && activeVenueId && (
+              <VenueServicesEditor
+                key={activeVenueId}
+                isDark={isDark}
+                venueId={activeVenueId}
+                groupId={group.id}
+                fieldClass={fieldClass}
+                showToast={showToast}
+                errorMessage={errorMessage}
+                onSheetChange={setServicesSheetOpen}
+              />
+            )}
 
             <div className="space-y-4">
               <form onSubmit={handleSaveSettings} className="space-y-4">

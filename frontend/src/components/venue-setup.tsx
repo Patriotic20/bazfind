@@ -81,7 +81,8 @@ export function isVenueSetupComplete(draft: VenueSetupDraft, kind: SetupKind): b
   return Boolean(restaurantReady && hallReady && draft.opens && draft.closes && draft.weekdays.length);
 }
 
-const DASTURXON = "dasturxon_tuzash";
+/** Standart is `dasturxon_tuzash`, premium `dasturxon_premium`; both list dishes. */
+export const isDasturxonSlug = (slug: string) => slug.startsWith("dasturxon");
 
 type Screen = "hub" | "tables" | "capacity" | "hours" | "days" | "services" | "catalog" | "service_form";
 
@@ -449,7 +450,7 @@ export function VenueSetup({ isDark, kind, value, onChange, onBack, onDone, init
     setFormService(service);
     setEditingIndex(index);
     setFormPrice(existing?.price ?? "");
-    setFormItems(existing?.items.length ? existing.items : service.slug === DASTURXON ? [{ name: "", price: "" }] : []);
+    setFormItems(existing?.items.length ? existing.items : isDasturxonSlug(service.slug) ? [{ name: "", price: "" }] : []);
     go("service_form");
   };
 
@@ -533,7 +534,7 @@ export function VenueSetup({ isDark, kind, value, onChange, onBack, onDone, init
   }
 
   // service_form
-  const isDasturxon = formService?.slug === DASTURXON;
+  const isDasturxon = isDasturxonSlug(formService?.slug ?? "");
   const saveService = () => {
     if (!formService) return;
     if (!(Number(formPrice) > 0)) {

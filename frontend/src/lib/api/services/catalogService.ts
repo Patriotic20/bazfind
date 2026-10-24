@@ -4,6 +4,7 @@ import {
   ServiceCatalogRead,
   VenueServiceRead,
   VenueServiceCreate,
+  VenueServiceUpdate,
   VenueTypeSlug,
 } from "../types";
 
@@ -32,6 +33,26 @@ export const catalogService = {
       method: "POST",
       params: { venue_id: venueId, group_id: groupId },
       body: JSON.stringify(data),
+    });
+  },
+
+  async updateVenueService(
+    serviceId: number | string,
+    data: VenueServiceUpdate,
+    venueId: number | string
+  ): Promise<VenueServiceRead> {
+    return apiFetch<VenueServiceRead>(`/api/v1/venue/services/${serviceId}`, {
+      method: "PATCH",
+      params: { venue_id: venueId },
+      body: JSON.stringify(data),
+    });
+  },
+
+  /** Switched off on the server, not deleted: past bookings still point at it. */
+  async removeVenueService(serviceId: number | string, venueId: number | string): Promise<void> {
+    await apiFetch<void>(`/api/v1/venue/services/${serviceId}`, {
+      method: "DELETE",
+      params: { venue_id: venueId },
     });
   },
 };
