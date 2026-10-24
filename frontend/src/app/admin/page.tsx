@@ -1993,9 +1993,11 @@ export default function AdminPage() {
                 </div>
 
                 <div>
-                  <h3 className="text-base font-black">Xodim taklifnomasi yaratildi!</h3>
+                  <h3 className="text-base font-black">Xodim qo&apos;shildi!</h3>
                   <p className="text-xs text-zinc-400 mt-0.5">
-                    Ushbu login va vaqtinchalik parolni xodimga bering — u kirganda o&apos;z parolini o&apos;rnatadi.
+                    {createdInvitation.temporary_password
+                      ? "Ushbu login va parolni xodimga bering — u shu bilan darhol tizimga kiradi."
+                      : "Bu raqam bilan akkaunt allaqachon bor — xodim o'z telefon raqami va paroli bilan kiradi."}
                   </p>
                 </div>
 
@@ -2024,28 +2026,35 @@ export default function AdminPage() {
                       <Copy className="w-3.5 h-3.5" />
                     </button>
                   </div>
-                  <div className="flex items-center justify-between">
-                    <div className="text-xs">
-                      <span className="text-zinc-400 block font-semibold text-[10px]">Vaqtinchalik parol:</span>
-                      <span className="font-mono font-black text-sm text-emerald-500">{createdInvitation.temporary_password}</span>
+                  {createdInvitation.temporary_password && (
+                    <div className="flex items-center justify-between">
+                      <div className="text-xs">
+                        <span className="text-zinc-400 block font-semibold text-[10px]">Parol:</span>
+                        <span className="font-mono font-black text-sm text-emerald-500">{createdInvitation.temporary_password}</span>
+                      </div>
+                      <button
+                        onClick={() => {
+                          navigator.clipboard.writeText(createdInvitation.temporary_password ?? "");
+                          showToast("Parol nusxalandi!");
+                        }}
+                        className="p-1.5 rounded-lg bg-zinc-200 dark:bg-white/10 hover:bg-zinc-300 text-xs font-bold cursor-pointer"
+                        title="Nusxa olish"
+                      >
+                        <Copy className="w-3.5 h-3.5" />
+                      </button>
                     </div>
-                    <button
-                      onClick={() => {
-                        navigator.clipboard.writeText(createdInvitation.temporary_password);
-                        showToast("Parol nusxalandi!");
-                      }}
-                      className="p-1.5 rounded-lg bg-zinc-200 dark:bg-white/10 hover:bg-zinc-300 text-xs font-bold cursor-pointer"
-                      title="Nusxa olish"
-                    >
-                      <Copy className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
+                  )}
                 </div>
 
                 <div className="flex flex-col gap-2 pt-1">
                   <button
                     onClick={() => {
-                      const shareText = `Bazmly tizimiga xodim taklifnomasi:\nIsm: ${createdInvitation.full_name}\nLogin: ${createdInvitation.login}\nParol: ${createdInvitation.temporary_password}`;
+                      const shareText = [
+                        "Bazmly tizimiga kirish ma'lumotlari:",
+                        `Ism: ${createdInvitation.full_name}`,
+                        `Login: ${createdInvitation.login}`,
+                        `Parol: ${createdInvitation.temporary_password ?? "o'zingizning parolingiz"}`,
+                      ].join("\n");
                       navigator.clipboard.writeText(shareText);
                       showToast("Barcha ma'lumotlar nusxalandi!");
                       setCreatedInvitation(null);

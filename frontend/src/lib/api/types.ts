@@ -911,7 +911,8 @@ export interface StaffInvitationCreated {
   accepted_at: string | null;
   expires_at: string;
   login: string;
-  temporary_password: string;
+  /** Null when the phone already had an account with its own password. */
+  temporary_password: string | null;
 }
 
 export interface InvitationAccept {
