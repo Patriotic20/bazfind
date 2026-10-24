@@ -119,6 +119,11 @@ export default function LoginPage() {
   const isDark = theme === "dark";
   const [mounted, setMounted] = useState(false);
   const [isRegistered, setIsRegistered] = useState(false);
+  // Set while a sign-in or sign-up is on its way to another page. The account
+  // exists as soon as `register`/`login` resolves, which would swap this page to
+  // the profile view while the partner setup is still running — so the profile
+  // flashed up before the panel opened.
+  const [leaving, setLeaving] = useState(false);
   // Step 1 was an interface-language picker; the interface has one language
   // and the server no longer stores a choice, so the wizard starts at 2.
   const [step, setStep] = useState<Step>(2);
@@ -250,6 +255,7 @@ export default function LoginPage() {
         return;
       }
 
+      setLeaving(true);
       await register({
         phone: formattedPhone,
         first_name: firstName,
@@ -264,6 +270,7 @@ export default function LoginPage() {
       showToast("Ro'yxatdan muvaffaqiyatli o'tdingiz!");
       router.push("/feed");
     } catch (err: any) {
+      setLeaving(false);
       setError(err?.message || "Ro'yxatdan o'tishda xatolik yuz berdi");
     } finally {
       setLoading(false);
@@ -869,6 +876,7 @@ export default function LoginPage() {
           return;
         }
 
+        setLeaving(true);
         await login({ phone: phoneToLogin, password: password.trim() });
         showToast("Tizimga muvaffaqiyatli kirdingiz!");
         setIsRegistered(true);
@@ -882,6 +890,7 @@ export default function LoginPage() {
         return;
       } else {
         // Staff username login
+        setLeaving(true);
         await loginStaff({ login: username.trim(), password: password.trim() });
         showToast("Xodim sifatida tizimga kirdingiz!");
         setIsRegistered(true);
@@ -889,6 +898,7 @@ export default function LoginPage() {
         return;
       }
     } catch (err: any) {
+      setLeaving(false);
       setError(err?.message || "Login yoki parol noto'g'ri!");
     } finally {
       setLoading(false);
@@ -931,6 +941,7 @@ export default function LoginPage() {
 
     setLoading(true);
     try {
+      setLeaving(true);
       await register({ phone: formattedPhone, password: password.trim(), first_name: firstName, last_name: rest.join(" ") });
       const created = await partnerService.createGroupWithBranch({
         group: { name: venueName.trim(), primary_venue_type: venueKind },
@@ -958,11 +969,10 @@ export default function LoginPage() {
         })),
       });
       await partnerService.updateVenue(venueId, { status: "active" });
-      // Straight to the panel: flipping isRegistered swaps this page to the
-      // profile view, so the step-8 summary was never seen anyway.
       showToast("Ro'yxatdan muvaffaqiyatli o'tdingiz!");
       router.push("/admin");
     } catch (err) {
+      setLeaving(false);
       setError(err instanceof Error ? err.message : "Ro'yxatdan o'tishda xatolik yuz berdi");
     } finally {
       setLoading(false);
@@ -1034,7 +1044,7 @@ export default function LoginPage() {
         </div>
       )}
 
-      {isRegistered ? (
+      {isRegistered && !leaving ? (
         /* ==================== REGISTERED PROFILE VIEW ==================== */
         <div className={`flex flex-col flex-1 bg-[var(--background)] ${isDark ? "text-white" : "text-zinc-900"} transition-all duration-300 ${isBottomNavHidden ? "-mb-16" : ""}`}>
           {showMessages ? (
