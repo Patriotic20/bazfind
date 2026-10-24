@@ -15,6 +15,8 @@ import {
 import { QRCodeSVG } from "qrcode.react";
 import Navbar from "@/components/navbar";
 import { useAuth } from "@/contexts/AuthContext";
+import { PhoneInput } from "@/components/phone-input";
+import { formatPhone, phoneDigits, toE164 } from "@/lib/phone";
 import {
   venueService,
   bookingService,
@@ -133,7 +135,7 @@ function BookingContent({ id }: { id: string }) {
   if (user && !prefilled) {
     setPrefilled(true);
     setFullName(`${user.first_name ?? ""} ${user.last_name ?? ""}`.trim());
-    setPhoneNumber(user.phone ?? "");
+    setPhoneNumber(phoneDigits(user.phone));
   }
 
   const venue = venueDetail?.venue;
@@ -196,7 +198,7 @@ function BookingContent({ id }: { id: string }) {
         table_id: selectedTable.id,
         guests_count: guests,
         contact_name: fullName.trim(),
-        contact_phone: phoneNumber.trim(),
+        contact_phone: toE164(phoneNumber) ?? "",
         note: note.trim() || null,
         items: orderLines.map(({ menu_item_id, quantity }) => ({ menu_item_id, quantity })),
       });
@@ -233,7 +235,7 @@ function BookingContent({ id }: { id: string }) {
   const venueName = venue.name;
   const venueLocation = formatAddress(venue.street, venue.house_number);
   const cover = venueDetail.photos[0]?.url;
-  const detailsValid = fullName.trim().length > 0 && phoneNumber.trim().length > 0;
+  const detailsValid = fullName.trim().length > 0 && toE164(phoneNumber) !== null;
   const booking = created?.booking;
   const status = booking ? (STATUS_LABELS[booking.status] ?? { label: booking.status, tone: "" }) : null;
   const chip = "rounded-2xl border border-zinc-200/80 dark:border-white/5 bg-white dark:bg-[#2C2C2E]";
@@ -426,20 +428,28 @@ function BookingContent({ id }: { id: string }) {
           <div className="space-y-6">
             {[
               { label: "Ism/Familiya", icon: "👤", value: fullName, set: setFullName, placeholder: "Ism/Familiya" },
-              { label: "Telefon raqam", icon: "📞", value: phoneNumber, set: setPhoneNumber, placeholder: "+998 ** *** ** **" },
+              { label: "Telefon raqam", icon: "📞", value: phoneNumber, set: setPhoneNumber, placeholder: "", phone: true },
               { label: "Izoh (ixtiyoriy)", icon: "📝", value: note, set: setNote, placeholder: "Masalan: deraza yonidagi stol" },
             ].map((field) => (
               <div key={field.label} className="space-y-2.5 text-left">
                 <label className="block text-sm font-bold tracking-wide">{field.label}</label>
                 <div className="flex items-center gap-3 pb-2 border-b border-zinc-200 dark:border-zinc-800 focus-within:border-[#FF6B00] transition-colors">
                   <span className="text-zinc-500 text-base">{field.icon}</span>
-                  <input
-                    type="text"
-                    value={field.value}
-                    onChange={(e) => field.set(e.target.value)}
-                    className="w-full bg-transparent border-0 p-0 text-base font-bold focus:ring-0 outline-none placeholder:text-zinc-400 dark:placeholder:text-zinc-600"
-                    placeholder={field.placeholder}
-                  />
+                  {"phone" in field ? (
+                    <PhoneInput
+                      value={field.value}
+                      onChange={field.set}
+                      className="w-full bg-transparent border-0 p-0 text-base font-bold focus:ring-0 outline-none placeholder:text-zinc-400 dark:placeholder:text-zinc-600"
+                    />
+                  ) : (
+                    <input
+                      type="text"
+                      value={field.value}
+                      onChange={(e) => field.set(e.target.value)}
+                      className="w-full bg-transparent border-0 p-0 text-base font-bold focus:ring-0 outline-none placeholder:text-zinc-400 dark:placeholder:text-zinc-600"
+                      placeholder={field.placeholder}
+                    />
+                  )}
                 </div>
               </div>
             ))}
@@ -477,7 +487,7 @@ function BookingContent({ id }: { id: string }) {
               <SummaryRow label="Sana va vaqt:" value={`${formatDate(selectedDate)} • ${selectedTime}–${endTime}`} />
               <SummaryRow label="Mehmonlar:" value={`${guests} kishi`} />
               <SummaryRow label="Stol:" value={selectedTable ? `${selectedTable.number}-stol` : "—"} />
-              <SummaryRow label="Aloqa:" value={`${fullName} • ${phoneNumber}`} />
+              <SummaryRow label="Aloqa:" value={`${fullName} • ${formatPhone(phoneNumber)}`} />
             </div>
 
             {orderLines.length > 0 && (

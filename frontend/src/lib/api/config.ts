@@ -31,6 +31,12 @@ export class BazmlyApiError extends Error {
 
   constructor(status: number, data: any) {
     let msg = data?.message;
+    // A validation refusal carries the field's own sentence in details.errors;
+    // the top-level message is only "So'rov tekshiruvdan o'tmadi".
+    const fieldErrors = data?.details?.errors;
+    if (Array.isArray(fieldErrors) && fieldErrors[0]?.msg) {
+      msg = String(fieldErrors[0].msg).replace(/^Value error, /, "");
+    }
     if (!msg && Array.isArray(data?.detail)) {
       msg = data.detail.map((d: any) => d.msg || `${d.loc?.join(".")}: ${d.msg}`).join(", ");
     } else if (!msg && typeof data?.detail === "string") {

@@ -59,6 +59,8 @@ import {
 } from "@/lib/api";
 import { formatAddress, formatDate, formatMoney, formatTime, toApiDate } from "@/lib/format";
 import { upcomingDates } from "@/lib/venue-hours";
+import { PhoneInput } from "@/components/phone-input";
+import { formatPhone, toE164 } from "@/lib/phone";
 
 interface VenueDisplay {
   id: string | number;
@@ -404,7 +406,8 @@ export default function AdminPage() {
   const handleAddVenue = async (e: React.FormEvent) => {
     e.preventDefault();
     const district = districts.find((d) => d.id === newVenueDistrictId);
-    if (!newVenueName.trim() || !district || !newVenueStreet.trim() || !newVenueHouse.trim() || !newVenuePhone.trim()) {
+    const venuePhone = toE164(newVenuePhone);
+    if (!newVenueName.trim() || !district || !newVenueStreet.trim() || !newVenueHouse.trim() || !venuePhone) {
       showToast("Barcha majburiy maydonlarni to'ldiring");
       return;
     }
@@ -418,7 +421,7 @@ export default function AdminPage() {
       house_number: newVenueHouse.trim(),
       latitude: Number(district.latitude),
       longitude: Number(district.longitude),
-      phone: newVenuePhone.trim(),
+      phone: venuePhone,
       ...(newVenueType === "toyxona" ? { capacity_max: seats } : { total_seats: seats }),
     };
     setIsSubmittingVenue(true);
@@ -466,7 +469,8 @@ export default function AdminPage() {
   const handleAddStaff = async (e: React.FormEvent) => {
     e.preventDefault();
     const roleId = Number(newStaffRole);
-    if (!newStaffName.trim() || !newStaffPhone.trim() || !roleId || !activeVenueId || !group) {
+    const staffPhone = toE164(newStaffPhone);
+    if (!newStaffName.trim() || !staffPhone || !roleId || !activeVenueId || !group) {
       showToast("Barcha maydonlarni to'ldiring");
       return;
     }
@@ -474,7 +478,7 @@ export default function AdminPage() {
     try {
       const res = await partnerService.inviteStaff(
         group.id,
-        { full_name: newStaffName.trim(), phone: newStaffPhone.trim(), staff_role_id: roleId, venue_id: activeVenueId },
+        { full_name: newStaffName.trim(), phone: staffPhone, staff_role_id: roleId, venue_id: activeVenueId },
         activeVenueId,
       );
       setCreatedInvitation(res);
@@ -724,7 +728,7 @@ export default function AdminPage() {
 
           <label className="block space-y-1">
             <span className="text-xs font-bold opacity-60">Telefon raqam</span>
-            <input required type="tel" value={newVenuePhone} onChange={(e) => setNewVenuePhone(e.target.value)} placeholder="+998 90 123 45 67" className={fieldClass} />
+            <PhoneInput required value={newVenuePhone} onChange={setNewVenuePhone} className={fieldClass} />
           </label>
 
           <label className="block space-y-1">
@@ -1946,12 +1950,10 @@ export default function AdminPage() {
                   </div>
                   <div>
                     <label className="text-xs font-bold opacity-60 block mb-1">Telefon raqami</label>
-                    <input
-                      type="tel"
+                    <PhoneInput
                       required
                       value={newStaffPhone}
-                      onChange={(e) => setNewStaffPhone(e.target.value)}
-                      placeholder="+998901234567"
+                      onChange={setNewStaffPhone}
                       className={`w-full px-4 py-3 rounded-xl border text-sm font-bold outline-none ${
                         isDark ? "border-white/10 bg-[#393939]/50 focus:border-[#FF5A00]" : "border-zinc-200 bg-zinc-50 focus:border-[#FF5A00]"
                       }`}
@@ -2004,7 +2006,7 @@ export default function AdminPage() {
                   </div>
                   <div className="flex items-center justify-between text-xs">
                     <span className="text-zinc-400 font-semibold">Telefon:</span>
-                    <span className="font-extrabold">{createdInvitation.phone}</span>
+                    <span className="font-extrabold">{formatPhone(createdInvitation.phone)}</span>
                   </div>
                   <div className="border-t border-zinc-200/50 dark:border-white/5 pt-2 flex items-center justify-between">
                     <div className="text-xs">

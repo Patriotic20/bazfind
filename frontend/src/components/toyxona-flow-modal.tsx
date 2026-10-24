@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation";
 import { X, ChevronLeft, Check, CheckCircle, Loader2, Sparkles } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { useAuth } from "@/contexts/AuthContext";
+import { PhoneInput } from "@/components/phone-input";
+import { phoneDigits, toE164 } from "@/lib/phone";
 import {
   bookingService,
   venueService,
@@ -72,7 +74,7 @@ export default function ToyxonaFlowModal({ isOpen, onClose, detail, theme = "lig
 
   const [chosenServices, setChosenServices] = useState<Set<number>>(new Set());
   const [fullName, setFullName] = useState(user ? `${user.first_name} ${user.last_name}`.trim() : "");
-  const [phone, setPhone] = useState(user?.phone ?? "");
+  const [phone, setPhone] = useState(phoneDigits(user?.phone));
   const [note, setNote] = useState("");
 
   const [submitting, setSubmitting] = useState(false);
@@ -136,7 +138,7 @@ export default function ToyxonaFlowModal({ isOpen, onClose, detail, theme = "lig
         end_time: `${addHours(selectedTime, EVENT_HOURS)}:00`,
         guests_count: guests,
         contact_name: fullName.trim(),
-        contact_phone: phone.trim(),
+        contact_phone: toE164(phone) ?? "",
         note: note.trim() || null,
         services: pickedServices.map((s) => ({ venue_service_id: s.id, quantity: serviceQuantity(s, guests) })),
       });
@@ -442,19 +444,29 @@ export default function ToyxonaFlowModal({ isOpen, onClose, detail, theme = "lig
               <div className="space-y-4">
                 {[
                   { label: "Ism/Familiya", value: fullName, set: setFullName, placeholder: "Ism/Familiya" },
-                  { label: "Telefon raqam", value: phone, set: setPhone, placeholder: "+998 ** *** ** **" },
+                  { label: "Telefon raqam", value: phone, set: setPhone, placeholder: "", phone: true },
                   { label: "Izoh (ixtiyoriy)", value: note, set: setNote, placeholder: "Masalan: nikoh to'yi" },
                 ].map((field) => (
                   <label key={field.label} className="block space-y-1.5">
                     <span className="text-xs font-bold">{field.label}</span>
-                    <input
-                      value={field.value}
-                      onChange={(e) => field.set(e.target.value)}
-                      placeholder={field.placeholder}
-                      className={`w-full px-4 py-3 rounded-2xl text-sm font-semibold outline-none border border-transparent focus:border-[#FF5A00] ${
-                        isDark ? "bg-[#2A2A2A]" : "bg-[#F5F5F7]"
-                      }`}
-                    />
+                    {"phone" in field ? (
+                      <PhoneInput
+                        value={field.value}
+                        onChange={field.set}
+                        className={`w-full px-4 py-3 rounded-2xl text-sm font-semibold outline-none border border-transparent focus:border-[#FF5A00] ${
+                          isDark ? "bg-[#2A2A2A]" : "bg-[#F5F5F7]"
+                        }`}
+                      />
+                    ) : (
+                      <input
+                        value={field.value}
+                        onChange={(e) => field.set(e.target.value)}
+                        placeholder={field.placeholder}
+                        className={`w-full px-4 py-3 rounded-2xl text-sm font-semibold outline-none border border-transparent focus:border-[#FF5A00] ${
+                          isDark ? "bg-[#2A2A2A]" : "bg-[#F5F5F7]"
+                        }`}
+                      />
+                    )}
                   </label>
                 ))}
               </div>
@@ -480,9 +492,9 @@ export default function ToyxonaFlowModal({ isOpen, onClose, detail, theme = "lig
             </div>
             <div className={footer}>
               <button
-                disabled={submitting || !fullName.trim() || !phone.trim()}
+                disabled={submitting || !fullName.trim() || !toE164(phone)}
                 onClick={submit}
-                className={`${primary(!submitting && Boolean(fullName.trim() && phone.trim()))} flex items-center justify-center gap-2`}
+                className={`${primary(!submitting && Boolean(fullName.trim() && toE164(phone)))} flex items-center justify-center gap-2`}
               >
                 {submitting ? <Loader2 className="w-5 h-5 animate-spin" /> : isAuthenticated ? "Bron qilish" : "Bron qilish uchun tizimga kiring"}
               </button>

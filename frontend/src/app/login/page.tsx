@@ -36,6 +36,9 @@ import {
 import Navbar from "@/components/navbar";
 import { TelegramPhonePrompt } from "@/components/telegram-phone-prompt";
 import { useAuth } from "@/contexts/AuthContext";
+import { PhoneInput } from "@/components/phone-input";
+import { PasswordInput } from "@/components/password-input";
+import { formatPhone, phoneDigits, toE164 } from "@/lib/phone";
 import {
   authService,
   userService,
@@ -113,20 +116,6 @@ export default function LoginPage() {
   const { theme, toggleTheme } = useTheme();
   const { user, login, register, loginStaff, logout, updateProfile, deleteAccount, checkPhone } = useAuth();
   const isDark = theme === "dark";
-  const formatPhone = (val: string) => {
-    if (!val) return "";
-    let out = "";
-    if (val.length <= 2) {
-      out = "(" + val;
-    } else if (val.length <= 5) {
-      out = "(" + val.slice(0, 2) + ") " + val.slice(2);
-    } else if (val.length <= 7) {
-      out = "(" + val.slice(0, 2) + ") " + val.slice(2, 5) + "-" + val.slice(5);
-    } else {
-      out = "(" + val.slice(0, 2) + ") " + val.slice(2, 5) + "-" + val.slice(5, 7) + "-" + val.slice(7, 9);
-    }
-    return out;
-  };
   const [mounted, setMounted] = useState(false);
   const [isRegistered, setIsRegistered] = useState(false);
   // Step 1 was an interface-language picker; the interface has one language
@@ -251,11 +240,11 @@ export default function LoginPage() {
     try {
       const firstName = nameParts[0];
       const lastName = nameParts.slice(1).join(" ");
-      let formattedPhone = phone.trim().replace(/\D/g, "");
-      if (!formattedPhone.startsWith("998")) {
-        formattedPhone = "998" + formattedPhone;
+      const formattedPhone = toE164(phone);
+      if (!formattedPhone) {
+        setError("Telefon raqamini to'liq kiriting!");
+        return;
       }
-      formattedPhone = "+" + formattedPhone;
 
       await register({
         phone: formattedPhone,
@@ -283,11 +272,11 @@ export default function LoginPage() {
       return;
     }
     setError("");
-    let formattedPhone = phone.trim().replace(/\D/g, "");
-    if (!formattedPhone.startsWith("998")) {
-      formattedPhone = "998" + formattedPhone;
+    const formattedPhone = toE164(phone);
+    if (!formattedPhone) {
+      setError("Telefon raqamini to'liq kiriting!");
+      return;
     }
-    formattedPhone = "+" + formattedPhone;
 
     setLoading(true);
     try {
@@ -869,16 +858,13 @@ export default function LoginPage() {
 
     setLoading(true);
     try {
-      const digitsOnly = username.trim().replace(/\D/g, "");
-      const isPhoneNumber = digitsOnly.length >= 7;
+      const isPhoneNumber = /^\d+$/.test(username.trim());
 
       if (isPhoneNumber) {
-        let phoneToLogin = digitsOnly;
-        if (!phoneToLogin.startsWith("998") && phoneToLogin.length === 9) {
-          phoneToLogin = "998" + phoneToLogin;
-        }
-        if (!phoneToLogin.startsWith("+")) {
-          phoneToLogin = "+" + phoneToLogin;
+        const phoneToLogin = toE164(username);
+        if (!phoneToLogin) {
+          setError("Telefon raqamini to'liq kiriting!");
+          return;
         }
 
         await login({ phone: phoneToLogin, password: password.trim() });
@@ -931,9 +917,11 @@ export default function LoginPage() {
       setError("Manzil yoki ish vaqti to'liq emas — orqaga qaytib tekshiring.");
       return;
     }
-    let formattedPhone = phone.trim().replace(/\D/g, "");
-    if (!formattedPhone.startsWith("998")) formattedPhone = "998" + formattedPhone;
-    formattedPhone = "+" + formattedPhone;
+    const formattedPhone = toE164(phone);
+    if (!formattedPhone) {
+      setError("Telefon raqamini to'liq kiriting!");
+      return;
+    }
     const [firstName, ...rest] = fullName.trim().split(/\s+/);
     const venueKind = accountType === "toyxona" ? "toyxona" : "restoran";
     const size = Number(venueCapacity) || null;
@@ -968,9 +956,10 @@ export default function LoginPage() {
         })),
       });
       await partnerService.updateVenue(venueId, { status: "active" });
-      setIsRegistered(true);
-      setRole("partner");
-      setStep(8);
+      // Straight to the panel: flipping isRegistered swaps this page to the
+      // profile view, so the step-8 summary was never seen anyway.
+      showToast("Ro'yxatdan muvaffaqiyatli o'tdingiz!");
+      router.push("/admin");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Ro'yxatdan o'tishda xatolik yuz berdi");
     } finally {
@@ -1287,7 +1276,7 @@ export default function LoginPage() {
                     <label className={`block text-xs font-semibold ${isDark ? "text-zinc-400" : "text-zinc-500"}`}>Telefon raqam</label>
                     <input
                       type="text"
-                      value={editPhone}
+                      value={formatPhone(editPhone)}
                       readOnly
                       title="Telefon raqami akkauntga bog'langan va bu yerda o'zgarmaydi"
                       className={`w-full px-4 py-3.5 rounded-xl border text-sm font-medium outline-none focus:border-primary/50 transition-colors ${
@@ -1362,7 +1351,7 @@ export default function LoginPage() {
                     <div className={`flex items-center justify-center gap-2 ${
                       isDark ? "text-xs font-medium text-white/60" : "text-base font-semibold text-black"
                     }`}>
-                      <span>{user?.phone ?? ""}</span>
+                      <span>{formatPhone(user?.phone)}</span>
                     </div>
                   </div>
 
@@ -1931,9 +1920,14 @@ export default function LoginPage() {
                           <input
                             type="text"
                             required
-                            placeholder="admin yoki telefon"
-                            value={username}
-                            onChange={(e) => setUsername(e.target.value)}
+                            placeholder="+998 (99) 000 00 00 yoki login"
+                            value={/^[+\d(]/.test(username) ? formatPhone(username) : username}
+                            onChange={(e) => {
+                              // A number is kept as its nine digits and shown masked;
+                              // a staff login is kept as typed.
+                              const typed = e.target.value;
+                              setUsername(/^[+\d(]/.test(typed) ? phoneDigits(typed) : typed);
+                            }}
                             className="block w-full border-0 bg-transparent p-0 text-foreground dark:text-white font-bold outline-none placeholder-foreground/20 dark:placeholder-white/20 focus:ring-0 text-sm"
                           />
                         </div>
@@ -1943,8 +1937,7 @@ export default function LoginPage() {
                           <label className="block text-[10px] font-bold text-foreground/45 dark:text-white/40 uppercase tracking-wider mb-1">
                             Parol
                           </label>
-                          <input
-                            type="password"
+                          <PasswordInput
                             required
                             placeholder="••••••"
                             value={password}
@@ -1988,17 +1981,10 @@ export default function LoginPage() {
                         {/* Flag indicator +998 */}
                         <div className="flex items-center gap-2 shrink-0 select-none">
                           <img src="/icons/uzb.png" alt="UZ" className="w-5.5 h-5.5 rounded-full object-cover shadow-sm border border-zinc-200/50" />
-                          <span className="text-sm font-bold">+998</span>
                         </div>
-                        <input
-                          type="tel"
-                          maxLength={14}
-                          value={formatPhone(phone)}
-                          onChange={(e) => {
-                            const val = e.target.value.replace(/\D/g, "");
-                            setPhone(val.substring(0, 9));
-                          }}
-                          placeholder="90 123 45 67"
+                        <PhoneInput
+                          value={phone}
+                          onChange={setPhone}
                           className="flex-1 bg-transparent text-sm font-bold tracking-wide outline-none border-none focus:ring-0 p-0"
                         />
                       </div>
@@ -2066,8 +2052,7 @@ export default function LoginPage() {
                             : "bg-zinc-50 border-zinc-200 text-black focus:border-[#FF5A00]"
                         } text-sm font-bold tracking-wide`}
                       />
-                      <input
-                        type="password"
+                      <PasswordInput
                         value={password}
                         onChange={(e) => setPassword(e.target.value)}
                         placeholder="Parol (kamida 8 belgi)"
@@ -2639,19 +2624,10 @@ export default function LoginPage() {
                           {/* Flag indicator +998 */}
                           <div className="flex items-center gap-2 shrink-0 select-none">
                             <img src="/icons/uzb.png" alt="UZ" className="w-5.5 h-5.5 rounded-full object-cover shadow-sm border border-zinc-200/50" />
-                            <span className="text-sm font-bold">+998</span>
                           </div>
-                          {/* Phone digits input */}
-                          <input
-                            type="tel"
+                          <PhoneInput
                             value={phone}
-                            onChange={(e) => {
-                              const cleaned = e.target.value.replace(/\D/g, "");
-                              if (cleaned.length <= 9) {
-                                setPhone(cleaned);
-                              }
-                            }}
-                            placeholder="90 123 45 67"
+                            onChange={setPhone}
                             className="flex-1 bg-transparent border-0 p-0 text-sm font-bold tracking-wide outline-none focus:ring-0 focus:outline-none"
                           />
                         </div>
@@ -2677,7 +2653,7 @@ export default function LoginPage() {
                               : "bg-[#FF5A00]/20 text-[#FF5A00]/45 cursor-not-allowed"
                         }`}
                       >
-                        Kodni olish
+                        Keyingisi
                       </button>
                     </div>
                   </div>
@@ -2712,8 +2688,7 @@ export default function LoginPage() {
                       )}
 
                       <div className="space-y-4 text-left">
-                        <input
-                          type="password"
+                        <PasswordInput
                           value={password}
                           onChange={(e) => setPassword(e.target.value)}
                           placeholder="••••••"
