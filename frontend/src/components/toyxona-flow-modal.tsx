@@ -453,7 +453,7 @@ export default function ToyxonaFlowModal({ isOpen, onClose, detail, theme = "lig
                       <PhoneInput
                         value={field.value}
                         onChange={field.set}
-                        className={`w-full px-4 py-3 rounded-2xl text-sm font-semibold outline-none border border-transparent focus:border-[#FF5A00] ${
+                        className={`w-full px-4 py-3 rounded-2xl text-sm font-semibold outline-none border border-transparent focus-within:border-[#FF5A00] ${
                           isDark ? "bg-[#2A2A2A]" : "bg-[#F5F5F7]"
                         }`}
                       />

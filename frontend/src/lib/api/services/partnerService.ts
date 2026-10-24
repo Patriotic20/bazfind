@@ -20,6 +20,9 @@ import {
   StaffInvitationCreated,
   InvitationAccept,
   VenueStaffRead,
+  VenueStaffUpdate,
+  StaffPasswordReset,
+  VenuePhotoRead,
   MenuCategoryRead,
   MenuCategoryCreate,
   MenuItemListItem,
@@ -215,6 +218,34 @@ export const partnerService = {
       params: { phone },
       body: JSON.stringify(data),
       skipAuth: true,
+    });
+  },
+
+  async updateStaff(
+    staffId: number | string,
+    venueId: number | string,
+    data: VenueStaffUpdate
+  ): Promise<VenueStaffListItem> {
+    return apiFetch<VenueStaffListItem>(`/api/v1/venue/staff/${staffId}`, {
+      method: "PATCH",
+      params: { venue_id: venueId },
+      body: JSON.stringify(data),
+    });
+  },
+
+  /** A new password for the same login; the old one stops working. Shown once. */
+  async resetStaffPassword(staffId: number | string, venueId: number | string): Promise<StaffPasswordReset> {
+    return apiFetch<StaffPasswordReset>(`/api/v1/venue/staff/${staffId}/password`, {
+      method: "POST",
+      params: { venue_id: venueId },
+    });
+  },
+
+  /** Replaces the branch's photos with these, in order; the first is the cover. At most 5. */
+  async replaceVenuePhotos(venueId: number | string, urls: string[]): Promise<VenuePhotoRead[]> {
+    return apiFetch<VenuePhotoRead[]>(`/api/v1/venue/venues/${venueId}/photos`, {
+      method: "PUT",
+      body: JSON.stringify({ urls }),
     });
   },
 

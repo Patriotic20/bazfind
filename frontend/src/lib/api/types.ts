@@ -912,6 +912,19 @@ export interface VenueStaffListItem {
   user: UserListItem;
 }
 
+/** Only the fields sent change. */
+export interface VenueStaffUpdate {
+  first_name?: string;
+  last_name?: string;
+  staff_role_id?: number;
+  is_active?: boolean;
+}
+
+export interface StaffPasswordReset {
+  login: string;
+  temporary_password: string;
+}
+
 export interface StaffInvitationCreate {
   full_name: string;
   phone: string;

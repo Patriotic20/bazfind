@@ -51,6 +51,8 @@ import {
   BookingRead,
   BookingListItem,
   VenueStaffListItem,
+  VenueStaffUpdate,
+  StaffPasswordReset,
   MenuItemListItem,
   MenuCategoryRead,
   DashboardRead,
@@ -63,6 +65,10 @@ import { upcomingDates } from "@/lib/venue-hours";
 import { PhoneInput } from "@/components/phone-input";
 import { formatPhone, toE164 } from "@/lib/phone";
 import { shrinkImage } from "@/lib/image";
+import { AmountInput } from "@/components/amount-input";
+
+/** The API's limit too (`MAX_VENUE_PHOTOS` in the venues schemas). */
+const MAX_VENUE_PHOTOS = 5;
 
 interface VenueDisplay {
   id: string | number;
@@ -170,6 +176,13 @@ export default function AdminPage() {
   const [staffCounts, setStaffCounts] = useState<StaffCountsRead | null>(null);
   const [createdInvitation, setCreatedInvitation] = useState<StaffInvitationCreated | null>(null);
   const [isSubmittingStaff, setIsSubmittingStaff] = useState(false);
+  const [editingStaff, setEditingStaff] = useState<VenueStaffListItem | null>(null);
+  const [editStaffFirst, setEditStaffFirst] = useState("");
+  const [editStaffLast, setEditStaffLast] = useState("");
+  const [editStaffRole, setEditStaffRole] = useState("");
+  const [isSavingStaff, setIsSavingStaff] = useState(false);
+  const [resetCredentials, setResetCredentials] = useState<StaffPasswordReset | null>(null);
+  const [isSavingPhotos, setIsSavingPhotos] = useState(false);
   const [staffRoleFilter, setStaffRoleFilter] = useState<string | "all">("all");
 
   // Menu
@@ -499,6 +512,98 @@ export default function AdminPage() {
     }
   };
 
+  const openEditStaff = (member: VenueStaffListItem) => {
+    // The owner is the chain itself; the API refuses to edit them anyway.
+    if (roleById(member.staff_role_id)?.slug === "owner") return;
+    setEditingStaff(member);
+    setEditStaffFirst(member.user.first_name);
+    setEditStaffLast(member.user.last_name ?? "");
+    setEditStaffRole(String(member.staff_role_id));
+    setResetCredentials(null);
+  };
+
+  const handleSaveStaff = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingStaff || !activeVenueId) return;
+    const changes: VenueStaffUpdate = {};
+    // Only what changed: someone who joined with their own account keeps their
+    // name, and the API refuses a rename it would otherwise get on every save.
+    if (editStaffFirst.trim() !== editingStaff.user.first_name) changes.first_name = editStaffFirst.trim();
+    if (editStaffLast.trim() !== (editingStaff.user.last_name ?? "")) changes.last_name = editStaffLast.trim();
+    if (Number(editStaffRole) !== editingStaff.staff_role_id) changes.staff_role_id = Number(editStaffRole);
+    if (Object.keys(changes).length === 0) {
+      setEditingStaff(null);
+      return;
+    }
+    if (changes.first_name === "") {
+      showToast("Ismni kiriting");
+      return;
+    }
+    setIsSavingStaff(true);
+    try {
+      const updated = await partnerService.updateStaff(editingStaff.id, activeVenueId, changes);
+      setStaff((prev) => prev.map((s) => (s.id === updated.id ? updated : s)));
+      showToast("Xodim ma'lumotlari saqlandi");
+      setEditingStaff(null);
+    } catch (err) {
+      showToast(errorMessage(err, "Saqlab bo'lmadi"));
+    } finally {
+      setIsSavingStaff(false);
+    }
+  };
+
+  const handleResetStaffPassword = async () => {
+    if (!editingStaff || !activeVenueId) return;
+    setIsSavingStaff(true);
+    try {
+      setResetCredentials(await partnerService.resetStaffPassword(editingStaff.id, activeVenueId));
+    } catch (err) {
+      showToast(errorMessage(err, "Yangi parol berib bo'lmadi"));
+    } finally {
+      setIsSavingStaff(false);
+    }
+  };
+
+  const saveVenuePhotos = async (urls: string[]) => {
+    if (!activeVenueId) return;
+    const photos = await partnerService.replaceVenuePhotos(activeVenueId, urls);
+    setVenueDetail((prev) => (prev ? { ...prev, photos } : prev));
+  };
+
+  const handleAddVenuePhotos = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    e.target.value = "";
+    const current = venueDetail?.photos.map((p) => p.url) ?? [];
+    const room = MAX_VENUE_PHOTOS - current.length;
+    if (!files.length || room <= 0) return;
+    if (files.length > room) showToast(`Ko'pi bilan ${MAX_VENUE_PHOTOS} ta rasm — ${room} tasi qo'shiladi`);
+    setIsSavingPhotos(true);
+    try {
+      const uploaded: string[] = [];
+      for (const file of files.slice(0, room)) {
+        uploaded.push((await partnerService.uploadImage(await shrinkImage(file))).url);
+      }
+      await saveVenuePhotos([...current, ...uploaded]);
+      showToast("Rasmlar saqlandi");
+    } catch (err) {
+      showToast(errorMessage(err, "Rasmni yuklab bo'lmadi"));
+    } finally {
+      setIsSavingPhotos(false);
+    }
+  };
+
+  const handleChangeVenuePhotos = async (urls: string[], done: string) => {
+    setIsSavingPhotos(true);
+    try {
+      await saveVenuePhotos(urls);
+      showToast(done);
+    } catch (err) {
+      showToast(errorMessage(err, "Saqlab bo'lmadi"));
+    } finally {
+      setIsSavingPhotos(false);
+    }
+  };
+
   const handleSelectCategory = (catId: number | "all") => {
     setSelectedMenuCategory(catId);
     setMenuItems(catId === "all" ? allMenuItems : allMenuItems.filter((item) => item.menu_category_id === catId));
@@ -678,6 +783,7 @@ export default function AdminPage() {
     showAddMenuModal ||
     itemToDelete !== null ||
     showAddStaffModal ||
+    editingStaff !== null ||
     createdInvitation !== null ||
     showCheckInModal ||
     showAddVenueModal;
@@ -1792,11 +1898,10 @@ export default function AdminPage() {
                   {!editingItem?.has_variants && (
                     <div>
                       <label className="text-xs font-bold opacity-70 block mb-1">Narxi (UZS)</label>
-                      <input
-                        type="text"
+                      <AmountInput
                         required
                         value={newItemPrice}
-                        onChange={(e) => setNewItemPrice(e.target.value)}
+                        onChange={setNewItemPrice}
                         placeholder="Masalan: 55 000"
                         className={`w-full px-4 py-3 rounded-xl border text-sm font-bold outline-none ${
                           isDark ? "border-white/10 bg-[#393939]" : "border-zinc-200 bg-zinc-50"
@@ -1956,7 +2061,10 @@ export default function AdminPage() {
                 .map((member) => (
                   <div
                     key={member.id}
+                    onClick={() => openEditStaff(member)}
                     className={`p-4 rounded-2xl border flex items-center justify-between gap-3 transition-all ${
+                      roleById(member.staff_role_id)?.slug === "owner" ? "" : "cursor-pointer"
+                    } ${
                       isDark ? "bg-[#393939]/30 border-white/5 hover:border-white/10" : "bg-white border-zinc-150 shadow-sm hover:border-zinc-250"
                     }`}
                   >
@@ -1981,7 +2089,10 @@ export default function AdminPage() {
                       </div>
                     </div>
                     <button
-                      onClick={() => handleToggleStaffActive(member.id, member.is_active)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleToggleStaffActive(member.id, member.is_active);
+                      }}
                       className={`px-3 py-1.5 rounded-full text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shrink-0 ${
                         member.is_active
                           ? "bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20 border border-emerald-500/20"
@@ -1998,6 +2109,95 @@ export default function AdminPage() {
           </main>
 
           {/* Add Staff Modal Drawer */}
+          {editingStaff && (
+            <div className="fixed inset-0 z-[60] bg-black/60 backdrop-blur-sm flex items-end justify-center animate-fade-in">
+              <div className="absolute inset-0" onClick={() => setEditingStaff(null)} />
+              <div
+                className={`w-full max-w-md rounded-t-[32px] px-6 pt-4 pb-8 flex flex-col gap-4 z-10 border-t relative text-left ${
+                  isDark ? "bg-[#2C2C2E] border-white/10" : "bg-white border-zinc-200"
+                }`}
+              >
+                <div className={`w-12 h-1 rounded-full mx-auto mb-2 ${isDark ? "bg-white/20" : "bg-zinc-250"}`} />
+                <div className="flex justify-between items-center">
+                  <h3 className="font-black text-base">Xodimni tahrirlash</h3>
+                  <button onClick={() => setEditingStaff(null)} className="p-1 rounded-lg hover:bg-white/10 text-zinc-400">
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+                <form onSubmit={handleSaveStaff} className="space-y-4">
+                  <div className="grid grid-cols-2 gap-3">
+                    <label className="block">
+                      <span className="text-xs font-bold opacity-60 block mb-1">Ism</span>
+                      <input value={editStaffFirst} onChange={(e) => setEditStaffFirst(e.target.value)} className={fieldClass} />
+                    </label>
+                    <label className="block">
+                      <span className="text-xs font-bold opacity-60 block mb-1">Familiya</span>
+                      <input value={editStaffLast} onChange={(e) => setEditStaffLast(e.target.value)} className={fieldClass} />
+                    </label>
+                  </div>
+                  <label className="block">
+                    <span className="text-xs font-bold opacity-60 block mb-1">Lavozim</span>
+                    <select value={editStaffRole} onChange={(e) => setEditStaffRole(e.target.value)} className={`${fieldClass} cursor-pointer`}>
+                      {invitableRoles.map((role) => (
+                        <option key={role.id} value={role.id}>
+                          {role.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <div className={`p-4 rounded-2xl border space-y-2.5 ${isDark ? "bg-[#393939]/40 border-white/10" : "bg-zinc-50 border-zinc-200"}`}>
+                    {resetCredentials ? (
+                      <>
+                        <p className="text-xs text-zinc-400">Yangi parolni xodimga bering — eskisi endi ishlamaydi.</p>
+                        {[
+                          { label: "Login", value: resetCredentials.login, color: "text-[#FF5A00]" },
+                          { label: "Parol", value: resetCredentials.temporary_password, color: "text-emerald-500" },
+                        ].map((row) => (
+                          <div key={row.label} className="flex items-center justify-between">
+                            <div className="text-xs">
+                              <span className="text-zinc-400 block font-semibold text-[10px]">{row.label}:</span>
+                              <span className={`font-mono font-black text-sm ${row.color}`}>{row.value}</span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                navigator.clipboard.writeText(row.value);
+                                showToast(`${row.label} nusxalandi!`);
+                              }}
+                              className="p-1.5 rounded-lg bg-zinc-200 dark:bg-white/10 hover:bg-zinc-300 text-xs font-bold cursor-pointer"
+                              title="Nusxa olish"
+                            >
+                              <Copy className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        ))}
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={handleResetStaffPassword}
+                        disabled={isSavingStaff}
+                        className="w-full text-xs font-bold text-[#FF5A00] cursor-pointer disabled:opacity-50"
+                      >
+                        Yangi parol berish
+                      </button>
+                    )}
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={isSavingStaff}
+                    className="w-full py-3.5 bg-[#FF5A00] hover:bg-[#FF5A00]/90 text-white font-extrabold text-xs rounded-2xl shadow-lg cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50"
+                  >
+                    {isSavingStaff && <Loader2 className="h-4 w-4 animate-spin" />}
+                    <span>Saqlash</span>
+                  </button>
+                </form>
+              </div>
+            </div>
+          )}
+
           {showAddStaffModal && (
             <div className="fixed inset-0 z-[60] bg-black/60 backdrop-blur-sm flex items-end justify-center animate-fade-in">
               <div className="absolute inset-0" onClick={() => setShowAddStaffModal(false)} />
@@ -2057,7 +2257,7 @@ export default function AdminPage() {
                       value={newStaffPhone}
                       onChange={setNewStaffPhone}
                       className={`w-full px-4 py-3 rounded-xl border text-sm font-bold outline-none ${
-                        isDark ? "border-white/10 bg-[#393939]/50 focus:border-[#FF5A00]" : "border-zinc-200 bg-zinc-50 focus:border-[#FF5A00]"
+                        isDark ? "border-white/10 bg-[#393939]/50 focus-within:border-[#FF5A00]" : "border-zinc-200 bg-zinc-50 focus-within:border-[#FF5A00]"
                       }`}
                     />
                   </div>
@@ -2192,6 +2392,67 @@ export default function AdminPage() {
                 <h3 className="font-extrabold text-base">{partnerName}</h3>
                 <p className="text-xs text-zinc-400 font-bold uppercase tracking-wider">{partnerLocation}</p>
               </div>
+            </div>
+
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold opacity-60">
+                  Muassasa rasmlari ({venueDetail?.photos.length ?? 0}/{MAX_VENUE_PHOTOS})
+                </span>
+                {isSavingPhotos && <Loader2 className="h-4 w-4 animate-spin text-[#FF5A00]" />}
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                {(venueDetail?.photos ?? []).map((photo, index, all) => (
+                  <div key={photo.id} className="relative aspect-square rounded-xl overflow-hidden">
+                    <img src={photo.url} alt="" className="w-full h-full object-cover" />
+                    {index === 0 ? (
+                      <span className="absolute left-1.5 bottom-1.5 px-1.5 py-0.5 rounded bg-[#FF5A00] text-white text-[9px] font-black">
+                        Muqova
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        disabled={isSavingPhotos}
+                        onClick={() =>
+                          handleChangeVenuePhotos(
+                            [photo.url, ...all.filter((p) => p.id !== photo.id).map((p) => p.url)],
+                            "Muqova o'zgartirildi",
+                          )
+                        }
+                        className="absolute left-1.5 bottom-1.5 px-1.5 py-0.5 rounded bg-black/60 text-white text-[9px] font-bold cursor-pointer"
+                      >
+                        Muqova qilish
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      disabled={isSavingPhotos}
+                      onClick={() =>
+                        handleChangeVenuePhotos(
+                          all.filter((p) => p.id !== photo.id).map((p) => p.url),
+                          "Rasm o'chirildi",
+                        )
+                      }
+                      className="absolute right-1.5 top-1.5 p-1 rounded-full bg-black/60 text-white cursor-pointer"
+                      title="O'chirish"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                ))}
+                {(venueDetail?.photos.length ?? 0) < MAX_VENUE_PHOTOS && (
+                  <label
+                    className={`aspect-square rounded-xl border border-dashed flex flex-col items-center justify-center gap-1 text-zinc-400 cursor-pointer ${
+                      isDark ? "border-white/20 bg-[#393939]" : "border-zinc-300 bg-zinc-50"
+                    } ${isSavingPhotos ? "opacity-50 pointer-events-none" : ""}`}
+                  >
+                    <input type="file" accept="image/*" multiple className="hidden" onChange={handleAddVenuePhotos} />
+                    <Camera className="h-5 w-5" />
+                    <span className="text-[10px] font-bold">Rasm qo&apos;shish</span>
+                  </label>
+                )}
+              </div>
+              <p className="text-[11px] text-zinc-400">Birinchi rasm muqova bo&apos;lib, mijozlarga ro&apos;yxatda ko&apos;rinadi.</p>
             </div>
 
             <div className="space-y-4">

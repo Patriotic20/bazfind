@@ -37,6 +37,7 @@ import Navbar from "@/components/navbar";
 import { TelegramPhonePrompt } from "@/components/telegram-phone-prompt";
 import { useAuth } from "@/contexts/AuthContext";
 import { PhoneInput } from "@/components/phone-input";
+import { AmountInput } from "@/components/amount-input";
 import { PasswordInput } from "@/components/password-input";
 import { formatPhone, phoneDigits, toE164 } from "@/lib/phone";
 import {
@@ -2538,10 +2539,9 @@ export default function LoginPage() {
                       )}
 
                       <div className="space-y-4 text-left">
-                        <input
-                          type="number"
+                        <AmountInput
                           value={venuePrice}
-                          onChange={(e) => setVenuePrice(e.target.value)}
+                          onChange={setVenuePrice}
                           placeholder="O'rtacha narx (masalan: 150 000)"
                           className={`w-full px-4 py-3.5 rounded-2xl border transition-all outline-none ${
                             isDark 

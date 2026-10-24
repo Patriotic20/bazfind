@@ -24,11 +24,11 @@ export function toE164(digits: string): string | null {
   return national.length === 9 ? `+998${national}` : null;
 }
 
-/** `"991234567"` (or `"+998991234567"`) as `"+998 (99) 123 45 67"`; partial input stays partial. */
-export function formatPhone(value: string | null | undefined): string {
+/** `"991234567"` as `"(99) 123 45 67"` — what follows a fixed `+998`. Partial input stays partial. */
+export function formatNational(value: string | null | undefined): string {
   const d = phoneDigits(value);
   if (!d) return "";
-  let out = `+998 (${d.slice(0, 2)}`;
+  let out = `(${d.slice(0, 2)}`;
   if (d.length >= 2) out += ")";
   if (d.length > 2) out += ` ${d.slice(2, 5)}`;
   if (d.length > 5) out += ` ${d.slice(5, 7)}`;
@@ -36,4 +36,11 @@ export function formatPhone(value: string | null | undefined): string {
   return out;
 }
 
+/** `"991234567"` (or `"+998991234567"`) as `"+998 (99) 123 45 67"`; partial input stays partial. */
+export function formatPhone(value: string | null | undefined): string {
+  const national = formatNational(value);
+  return national ? `+998 ${national}` : "";
+}
+
 export const PHONE_PLACEHOLDER = "+998 (99) 000 00 00";
+export const NATIONAL_PLACEHOLDER = "(99) 000 00 00";

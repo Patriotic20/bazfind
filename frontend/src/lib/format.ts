@@ -100,6 +100,11 @@ export function formatMoney(value: string | number | null | undefined, currency 
   return currency === "UZS" ? `${grouped} so'm` : `${grouped} ${currency}`;
 }
 
+/** `"50000"` (or `"50 000"`) becomes `"50 000"` — a price while it is being typed. */
+export function formatAmount(value: string | null | undefined): string {
+  return (value ?? "").replace(/\D/g, "").replace(/^0+(?=\d)/, "").replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+}
+
 /** `25000000` becomes `"25M so'm"` — for cards too narrow for the full figure. */
 export function formatMoneyShort(value: string | number | null | undefined): string | null {
   if (value === null || value === undefined || value === "") return null;
