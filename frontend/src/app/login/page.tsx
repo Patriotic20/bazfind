@@ -39,12 +39,14 @@ import { useAuth } from "@/contexts/AuthContext";
 import { PhoneInput } from "@/components/phone-input";
 import { AmountInput } from "@/components/amount-input";
 import { PasswordInput } from "@/components/password-input";
+import { EMPTY_TOYXONA_SETUP, ToyxonaSetup, ToyxonaSetupDraft, isToyxonaSetupComplete } from "@/components/toyxona-setup";
 import { formatPhone, toE164 } from "@/lib/phone";
 import {
   authService,
   userService,
   geoService,
   partnerService,
+  catalogService,
   engagementService,
   RegionRead,
   DistrictRead,
@@ -64,6 +66,7 @@ type Step =
   | "region"
   | "district"
   | "partner_hours"
+  | "toyxona_setup"
   | 4
   | "partner_price"
   | 5
@@ -153,6 +156,10 @@ export default function LoginPage() {
   const [partnerHouse, setPartnerHouse] = useState("");
   const [venueCapacity, setVenueCapacity] = useState("");
   const [venuePrice, setVenuePrice] = useState("");
+  // A to'yxona replaces the hours, capacity and price steps with its own
+  // screens; what they collect is written once the account exists.
+  const [toyxonaSetup, setToyxonaSetup] = useState<ToyxonaSetupDraft>(EMPTY_TOYXONA_SETUP);
+  const [toyxonaEntry, setToyxonaEntry] = useState<"hub" | "services">("hub");
   const [venueImages, setVenueImages] = useState<string[]>([]);
   const [activePartnerField, setActivePartnerField] = useState<"name" | "hours" | "capacity" | "price" | "phone" | "password" | "">("name");
   const [isNumLayout, setIsNumLayout] = useState(false);
@@ -760,6 +767,11 @@ export default function LoginPage() {
         setError("Ko'cha va uy raqamini kiriting!");
         return;
       }
+      if (accountType === "toyxona") {
+        setToyxonaEntry("hub");
+        setStep("toyxona_setup");
+        return;
+      }
       setStep("partner_hours");
     } else if (step === "partner_hours") {
       if (!parseHours(venueHours)) {
@@ -829,7 +841,12 @@ export default function LoginPage() {
     } else if (step === 5) {
       setStep("partner_price");
     } else if (step === 6) {
-      setStep("partner_price");
+      if (accountType === "toyxona") {
+        setToyxonaEntry("services");
+        setStep("toyxona_setup");
+      } else {
+        setStep("partner_price");
+      }
     } else if (step === "partner_password") {
       setStep(6);
     } else if (step === 7) {
@@ -924,8 +941,13 @@ export default function LoginPage() {
   const handleCompletePartnerRegistration = async () => {
     setError("");
     const district = partnerDistricts.find((d) => d.id === selectedPartnerDistrictId);
-    const hours = parseHours(venueHours);
-    if (!district || !hours) {
+    const isToyxona = accountType === "toyxona";
+    const hours = isToyxona
+      ? toyxonaSetup.opens && toyxonaSetup.closes
+        ? { opens: toyxonaSetup.opens, closes: toyxonaSetup.closes }
+        : null
+      : parseHours(venueHours);
+    if (!district || !hours || (isToyxona && !isToyxonaSetupComplete(toyxonaSetup))) {
       setError("Manzil yoki ish vaqti to'liq emas — orqaga qaytib tekshiring.");
       return;
     }
@@ -935,9 +957,11 @@ export default function LoginPage() {
       return;
     }
     const [firstName, ...rest] = fullName.trim().split(/\s+/);
-    const venueKind = accountType === "toyxona" ? "toyxona" : "restoran";
+    const venueKind = isToyxona ? "toyxona" : "restoran";
     const size = Number(venueCapacity) || null;
-    const price = Number(venuePrice.replace(/\D/g, "")) || null;
+    // A to'yxona is priced by its services, not by an average per guest.
+    const price = isToyxona ? null : Number(venuePrice.replace(/\D/g, "")) || null;
+    const openDays = isToyxona ? toyxonaSetup.weekdays : [0, 1, 2, 3, 4, 5, 6];
 
     setLoading(true);
     try {
@@ -956,18 +980,35 @@ export default function LoginPage() {
           longitude: Number(district.longitude),
           phone: formattedPhone,
           base_price: price,
-          ...(venueKind === "toyxona" ? { capacity_max: size } : { total_seats: size }),
+          ...(isToyxona
+            ? {
+                capacity_min: Number(toyxonaSetup.capacityMin) || null,
+                capacity_max: Number(toyxonaSetup.capacityMax),
+                min_advance_booking_days: toyxonaSetup.minAdvanceDays,
+              }
+            : { total_seats: size }),
         },
       });
       const venueId = created.branches[0].id;
       await partnerService.updateWorkingHours(venueId, {
-        days: Array.from({ length: 7 }, (_, weekday) => ({
-          weekday,
-          opens_at: `${hours.opens}:00`,
-          closes_at: `${hours.closes}:00`,
-          is_closed: false,
-        })),
+        days: Array.from({ length: 7 }, (_, weekday) =>
+          openDays.includes(weekday)
+            ? { weekday, opens_at: `${hours.opens}:00`, closes_at: `${hours.closes}:00`, is_closed: false }
+            : { weekday, opens_at: null, closes_at: null, is_closed: true },
+        ),
       });
+      for (const [index, service] of (isToyxona ? toyxonaSetup.services : []).entries()) {
+        await catalogService.createVenueService(
+          {
+            service_catalog_id: service.catalogId,
+            price: Number(service.price),
+            sort_order: index,
+            items: service.items.map((item, i) => ({ name: item.name, price: Number(item.price), sort_order: i })),
+          },
+          venueId,
+          created.group.id,
+        );
+      }
       await partnerService.updateVenue(venueId, { status: "active" });
       showToast("Ro'yxatdan muvaffaqiyatli o'tdingiz!");
       router.push("/admin");
@@ -2485,6 +2526,23 @@ export default function LoginPage() {
                       </button>
                     </div>
                   </div>
+                )}
+
+                {step === "toyxona_setup" && (
+                  <ToyxonaSetup
+                    isDark={isDark}
+                    value={toyxonaSetup}
+                    onChange={setToyxonaSetup}
+                    initialScreen={toyxonaEntry}
+                    onBack={() => {
+                      setError("");
+                      setStep(3);
+                    }}
+                    onDone={() => {
+                      setError("");
+                      setStep(6);
+                    }}
+                  />
                 )}
 
                 {/* Step 4: Venue Capacity */}
