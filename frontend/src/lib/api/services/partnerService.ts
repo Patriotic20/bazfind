@@ -24,6 +24,8 @@ import {
   MenuCategoryCreate,
   MenuItemListItem,
   MenuItemRead,
+  MenuItemUpdate,
+  MediaUploadRead,
   BodyVenueMenuCreateItem,
   BranchAvailabilityUpdate,
   DashboardRead,
@@ -309,6 +311,25 @@ export const partnerService = {
     return apiFetch<MenuItemRead>(`/api/v1/venue/menu/items/${itemId}`, {
       params: venueId ? { venue_id: venueId } : undefined,
     });
+  },
+
+  async updateMenuItem(
+    itemId: number | string,
+    data: MenuItemUpdate,
+    venueId: number | string
+  ): Promise<MenuItemRead> {
+    return apiFetch<MenuItemRead>(`/api/v1/venue/menu/items/${itemId}`, {
+      method: "PATCH",
+      params: { venue_id: venueId },
+      body: JSON.stringify(data),
+    });
+  },
+
+  /** Returns the absolute URL to put in a `photo_url`. */
+  async uploadImage(image: Blob): Promise<MediaUploadRead> {
+    const body = new FormData();
+    body.append("file", image, "photo.jpg");
+    return apiFetch<MediaUploadRead>("/api/v1/media/images", { method: "POST", body });
   },
 
   async attachMenuItemToBranches(

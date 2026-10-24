@@ -581,6 +581,24 @@ export interface MenuItemCreate {
   sort_order?: number;
 }
 
+/** Only the fields sent change. */
+export interface MenuItemUpdate {
+  menu_category_id?: number;
+  name?: string;
+  description?: string | null;
+  base_price?: number | string | null;
+  photo_url?: string | null;
+  discount_percent?: number | string | null;
+  sort_order?: number;
+  is_available?: boolean;
+}
+
+export interface MediaUploadRead {
+  url: string;
+  content_type: string;
+  size_bytes: number;
+}
+
 export interface BodyVenueMenuCreateItem {
   payload: MenuItemCreate;
   variants?: MenuItemVariantCreate[] | null;

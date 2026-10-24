@@ -34,6 +34,7 @@ import {
   PlusCircle,
   Sparkles,
   Copy,
+  Camera,
 } from "lucide-react";
 import {
   partnerService,
@@ -61,6 +62,7 @@ import { formatAddress, formatDate, formatMoney, formatTime, toApiDate } from "@
 import { upcomingDates } from "@/lib/venue-hours";
 import { PhoneInput } from "@/components/phone-input";
 import { formatPhone, toE164 } from "@/lib/phone";
+import { shrinkImage } from "@/lib/image";
 
 interface VenueDisplay {
   id: string | number;
@@ -181,6 +183,10 @@ export default function AdminPage() {
   const [newItemDescription, setNewItemDescription] = useState("");
   const [isSubmittingMenu, setIsSubmittingMenu] = useState(false);
   const [itemToDelete, setItemToDelete] = useState<MenuItemListItem | null>(null);
+  // The add form doubles as the edit form; this is the dish being edited, if any.
+  const [editingItem, setEditingItem] = useState<MenuItemListItem | null>(null);
+  const [newItemPhoto, setNewItemPhoto] = useState<string | null>(null);
+  const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
 
   // Tables
   const [tableCounts, setTableCounts] = useState<Record<number, string>>({});
@@ -520,11 +526,50 @@ export default function AdminPage() {
     }
   };
 
-  const handleAddMenuItem = async (e: React.FormEvent) => {
+  const openNewMenuItem = () => {
+    setEditingItem(null);
+    setNewItemName("");
+    setNewItemPrice("");
+    setNewItemDescription("");
+    setNewItemPhoto(null);
+    setNewItemCategory(selectedMenuCategory === "all" ? undefined : selectedMenuCategory);
+    setShowAddMenuModal(true);
+  };
+
+  const openEditMenuItem = (item: MenuItemListItem) => {
+    setEditingItem(item);
+    setNewItemName(item.name);
+    setNewItemPrice(item.effective_price ? String(Math.round(Number(item.effective_price))) : "");
+    setNewItemDescription(item.description ?? "");
+    setNewItemPhoto(item.photo_url ?? null);
+    setNewItemCategory(item.menu_category_id);
+    setShowAddMenuModal(true);
+  };
+
+  const handlePickMenuPhoto = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    // Cleared so picking the same file again still fires a change.
+    e.target.value = "";
+    if (!file) return;
+    setIsUploadingPhoto(true);
+    try {
+      const image = await shrinkImage(file);
+      const uploaded = await partnerService.uploadImage(image);
+      setNewItemPhoto(uploaded.url);
+    } catch (err) {
+      showToast(errorMessage(err, "Rasmni yuklab bo'lmadi"));
+    } finally {
+      setIsUploadingPhoto(false);
+    }
+  };
+
+  const handleSaveMenuItem = async (e: React.FormEvent) => {
     e.preventDefault();
     const categoryId = newItemCategory ?? categories[0]?.id;
     const price = Number(newItemPrice.replace(/\D/g, ""));
-    if (!newItemName.trim() || !price || !activeVenueId) {
+    // A dish sold by portion has no price of its own; its form hides the field.
+    const needsPrice = !editingItem?.has_variants;
+    if (!newItemName.trim() || (needsPrice && !price) || !activeVenueId) {
       showToast("Nom va narxni kiriting");
       return;
     }
@@ -534,29 +579,43 @@ export default function AdminPage() {
     }
     setIsSubmittingMenu(true);
     try {
-      await partnerService.createMenuItem(
-        {
-          payload: {
+      if (editingItem) {
+        await partnerService.updateMenuItem(
+          editingItem.id,
+          {
             menu_category_id: categoryId,
             name: newItemName.trim(),
             description: newItemDescription.trim() || null,
-            base_price: price,
-            currency: "UZS",
-            sort_order: allMenuItems.length + 1,
-            has_variants: false,
+            photo_url: newItemPhoto,
+            ...(needsPrice ? { base_price: price } : {}),
           },
-        },
-        activeVenueId,
-      );
-      showToast(`"${newItemName.trim()}" menyuga qo'shildi`);
+          activeVenueId,
+        );
+        showToast(`"${newItemName.trim()}" saqlandi`);
+      } else {
+        await partnerService.createMenuItem(
+          {
+            payload: {
+              menu_category_id: categoryId,
+              name: newItemName.trim(),
+              description: newItemDescription.trim() || null,
+              base_price: price,
+              currency: "UZS",
+              photo_url: newItemPhoto,
+              sort_order: allMenuItems.length + 1,
+              has_variants: false,
+            },
+          },
+          activeVenueId,
+        );
+        showToast(`"${newItemName.trim()}" menyuga qo'shildi`);
+        setSelectedMenuCategory("all");
+      }
       setShowAddMenuModal(false);
-      setNewItemName("");
-      setNewItemPrice("");
-      setNewItemDescription("");
-      setSelectedMenuCategory("all");
+      setEditingItem(null);
       loadVenueData();
     } catch (err) {
-      showToast(errorMessage(err, "Taomni qo'shib bo'lmadi"));
+      showToast(errorMessage(err, editingItem ? "Taomni saqlab bo'lmadi" : "Taomni qo'shib bo'lmadi"));
     } finally {
       setIsSubmittingMenu(false);
     }
@@ -1400,7 +1459,7 @@ export default function AdminPage() {
                 <span>Toifa</span>
               </button>
               <button
-                onClick={() => setShowAddMenuModal(true)}
+                onClick={openNewMenuItem}
                 className="px-3 py-2 rounded-xl bg-[#FF5A00] text-white text-xs font-bold flex items-center gap-1.5 active:scale-95 transition-all shadow-md shadow-[#FF5A00]/20 cursor-pointer"
                 title="Yangi taom qo'shish"
               >
@@ -1489,7 +1548,7 @@ export default function AdminPage() {
                 ) : (
                   <div className="flex flex-col sm:flex-row gap-2 w-full max-w-xs mt-2">
                     <button
-                      onClick={() => setShowAddMenuModal(true)}
+                      onClick={openNewMenuItem}
                       className="flex-1 py-3 px-4 rounded-xl bg-[#FF5A00] hover:bg-[#FF5A00]/90 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-md transition-all cursor-pointer"
                     >
                       <Plus className="h-4 w-4" />
@@ -1502,14 +1561,19 @@ export default function AdminPage() {
               menuItems.map((item) => (
                 <div
                   key={item.id}
-                  className={`p-4 rounded-2xl border flex items-center justify-between gap-3 transition-all ${
+                  onClick={() => openEditMenuItem(item)}
+                  className={`p-4 rounded-2xl border flex items-center justify-between gap-3 transition-all cursor-pointer ${
                     isDark ? "bg-[#393939]/30 border-white/5 hover:border-white/15" : "bg-white border-zinc-150 shadow-sm hover:border-zinc-250"
                   }`}
                 >
                   <div className="flex items-center gap-3 min-w-0">
-                    <div className="w-12 h-12 rounded-xl bg-[#FF5A00]/10 flex items-center justify-center text-xl shrink-0">
-                      {getFoodEmoji(item.name)}
-                    </div>
+                    {item.photo_url ? (
+                      <img src={item.photo_url} alt={item.name} className="w-12 h-12 rounded-xl object-cover shrink-0" />
+                    ) : (
+                      <div className="w-12 h-12 rounded-xl bg-[#FF5A00]/10 flex items-center justify-center text-xl shrink-0">
+                        {getFoodEmoji(item.name)}
+                      </div>
+                    )}
                     <div className="space-y-0.5 truncate">
                       <h3 className="font-bold text-sm truncate">{item.name}</h3>
                       <div className="flex items-center gap-2">
@@ -1536,7 +1600,10 @@ export default function AdminPage() {
                       </span>
                     </div>
                     <button
-                      onClick={() => setItemToDelete(item)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setItemToDelete(item);
+                      }}
                       className="p-2 rounded-xl text-zinc-400 hover:text-red-500 hover:bg-red-500/10 transition-colors cursor-pointer"
                       title="Filial menyusidan o'chirish"
                     >
@@ -1635,7 +1702,7 @@ export default function AdminPage() {
               >
                 <div className={`w-12 h-1 rounded-full mx-auto mb-2 ${isDark ? "bg-white/20" : "bg-zinc-250"}`} />
                 <div className="flex justify-between items-center">
-                  <h3 className="font-black text-base">Yangi taom qo'shish</h3>
+                  <h3 className="font-black text-base">{editingItem ? "Taomni tahrirlash" : "Yangi taom qo'shish"}</h3>
                   <button
                     onClick={() => setShowAddMenuModal(false)}
                     className="p-1 rounded-full text-zinc-400 hover:text-zinc-600"
@@ -1643,7 +1710,40 @@ export default function AdminPage() {
                     <X className="h-5 w-5" />
                   </button>
                 </div>
-                <form onSubmit={handleAddMenuItem} className="space-y-3.5">
+                <form onSubmit={handleSaveMenuItem} className="space-y-3.5">
+                  <div className="flex items-center gap-3">
+                    <label
+                      className={`relative w-20 h-20 rounded-2xl border flex items-center justify-center overflow-hidden shrink-0 cursor-pointer ${
+                        newItemPhoto ? "border-transparent" : `border-dashed ${isDark ? "border-white/20 bg-[#393939]" : "border-zinc-300 bg-zinc-50"}`
+                      }`}
+                    >
+                      <input type="file" accept="image/*" className="hidden" onChange={handlePickMenuPhoto} disabled={isUploadingPhoto} />
+                      {newItemPhoto ? (
+                        <img src={newItemPhoto} alt="" className="w-full h-full object-cover" />
+                      ) : (
+                        <Camera className="h-6 w-6 text-zinc-400" />
+                      )}
+                      {isUploadingPhoto && (
+                        <span className="absolute inset-0 bg-black/40 flex items-center justify-center">
+                          <Loader2 className="h-5 w-5 animate-spin text-white" />
+                        </span>
+                      )}
+                    </label>
+                    <div className="text-xs space-y-1">
+                      <span className="font-bold opacity-70 block">Taom rasmi (ixtiyoriy)</span>
+                      <span className="text-zinc-400 block">{newItemPhoto ? "Almashtirish uchun rasm ustiga bosing" : "Rasm qo'shish uchun bosing"}</span>
+                      {newItemPhoto && (
+                        <button
+                          type="button"
+                          onClick={() => setNewItemPhoto(null)}
+                          className="text-rose-500 font-bold cursor-pointer"
+                        >
+                          Rasmni olib tashlash
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
                   <div>
                     <label className="text-xs font-bold opacity-70 block mb-1">Taom nomi</label>
                     <input
@@ -1689,19 +1789,21 @@ export default function AdminPage() {
                     )}
                   </div>
 
-                  <div>
-                    <label className="text-xs font-bold opacity-70 block mb-1">Narxi (UZS)</label>
-                    <input
-                      type="text"
-                      required
-                      value={newItemPrice}
-                      onChange={(e) => setNewItemPrice(e.target.value)}
-                      placeholder="Masalan: 55 000"
-                      className={`w-full px-4 py-3 rounded-xl border text-sm font-bold outline-none ${
-                        isDark ? "border-white/10 bg-[#393939]" : "border-zinc-200 bg-zinc-50"
-                      }`}
-                    />
-                  </div>
+                  {!editingItem?.has_variants && (
+                    <div>
+                      <label className="text-xs font-bold opacity-70 block mb-1">Narxi (UZS)</label>
+                      <input
+                        type="text"
+                        required
+                        value={newItemPrice}
+                        onChange={(e) => setNewItemPrice(e.target.value)}
+                        placeholder="Masalan: 55 000"
+                        className={`w-full px-4 py-3 rounded-xl border text-sm font-bold outline-none ${
+                          isDark ? "border-white/10 bg-[#393939]" : "border-zinc-200 bg-zinc-50"
+                        }`}
+                      />
+                    </div>
+                  )}
 
                   <div>
                     <label className="text-xs font-bold opacity-70 block mb-1">Tarkibi yoki tavsif (ixtiyoriy)</label>
@@ -1718,11 +1820,11 @@ export default function AdminPage() {
 
                   <button
                     type="submit"
-                    disabled={isSubmittingMenu}
+                    disabled={isSubmittingMenu || isUploadingPhoto}
                     className="w-full py-3.5 bg-[#FF5A00] hover:bg-[#FF5A00]/90 text-white font-extrabold text-xs rounded-2xl shadow-lg mt-2 cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50"
                   >
                     {isSubmittingMenu && <Loader2 className="h-4 w-4 animate-spin" />}
-                    <span>Menyuga saqlash</span>
+                    <span>{editingItem ? "Saqlash" : "Menyuga saqlash"}</span>
                   </button>
                 </form>
               </div>
