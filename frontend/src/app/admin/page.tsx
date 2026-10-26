@@ -67,6 +67,7 @@ import { formatPhone, toE164 } from "@/lib/phone";
 import { shrinkImage } from "@/lib/image";
 import { AmountInput } from "@/components/amount-input";
 import { VenueServicesEditor } from "@/components/venue-services-editor";
+import { TimePicker, formatHours } from "@/components/time-picker";
 
 /** The API's limit too (`MAX_VENUE_PHOTOS` in the venues schemas). */
 const MAX_VENUE_PHOTOS = 5;
@@ -128,7 +129,7 @@ export default function AdminPage() {
       ? "Belgilanmagan"
       : todayHours.is_closed || !todayHours.opens_at || !todayHours.closes_at
         ? "Bugun dam olish"
-        : `${formatTime(todayHours.opens_at)} - ${formatTime(todayHours.closes_at)}`;
+        : formatHours(formatTime(todayHours.opens_at), formatTime(todayHours.closes_at));
 
   // API data
   const [analytics, setAnalytics] = useState<DashboardRead | null>(null);
@@ -751,15 +752,17 @@ export default function AdminPage() {
     try {
       await partnerService.updateVenue(activeVenueId, { name: settingsName.trim() });
       if (settingsOpens && settingsCloses) {
-        // One opening and closing time for the whole week — the same shape
-        // the onboarding wizard writes.
+        // One opening and closing time for every working day. The days off
+        // set at sign-up stay off — writing all seven as open undid them.
+        const closedDays = new Set(
+          (venueDetail?.working_hours ?? []).filter((h) => h.is_closed).map((h) => h.weekday),
+        );
         await partnerService.updateWorkingHours(activeVenueId, {
-          days: Array.from({ length: 7 }, (_, weekday) => ({
-            weekday,
-            opens_at: `${settingsOpens}:00`,
-            closes_at: `${settingsCloses}:00`,
-            is_closed: false,
-          })),
+          days: Array.from({ length: 7 }, (_, weekday) =>
+            closedDays.has(weekday)
+              ? { weekday, opens_at: null, closes_at: null, is_closed: true }
+              : { weekday, opens_at: `${settingsOpens}:00`, closes_at: `${settingsCloses}:00`, is_closed: false },
+          ),
         });
       }
       showToast("Sozlamalar saqlandi");
@@ -2479,16 +2482,20 @@ export default function AdminPage() {
                 </label>
 
                 <div className="grid grid-cols-2 gap-3">
-                  <label className="block space-y-1.5">
-                    <span className="text-xs font-bold opacity-60">Ochiladi</span>
-                    <input type="time" value={settingsOpens} onChange={(e) => setSettingsOpens(e.target.value)} className={fieldClass} />
-                  </label>
-                  <label className="block space-y-1.5">
-                    <span className="text-xs font-bold opacity-60">Yopiladi</span>
-                    <input type="time" value={settingsCloses} onChange={(e) => setSettingsCloses(e.target.value)} className={fieldClass} />
-                  </label>
+                  <div className="space-y-1.5">
+                    <span className="text-xs font-bold opacity-60 block">Ochiladi</span>
+                    <TimePicker isDark={isDark} value={settingsOpens} onChange={setSettingsOpens} title="Ochilish vaqti" className={fieldClass} />
+                  </div>
+                  <div className="space-y-1.5">
+                    <span className="text-xs font-bold opacity-60 block">Yopiladi</span>
+                    <TimePicker isDark={isDark} value={settingsCloses} onChange={setSettingsCloses} title="Yopilish vaqti" className={fieldClass} />
+                  </div>
                 </div>
-                <p className="text-[11px] text-zinc-400 -mt-2">Ish vaqti haftaning barcha kunlariga qo&apos;llanadi.</p>
+                <p className="text-[11px] text-zinc-400 -mt-2">
+                  Ish vaqti barcha ish kunlariga qo&apos;llanadi; dam olish kunlari o&apos;zgarmaydi.
+                  {settingsOpens && settingsOpens === settingsCloses && " Bir xil vaqt — 24 soat ochiq."}
+                  {settingsOpens && settingsCloses && settingsCloses < settingsOpens && ` Ertasi kuni ${settingsCloses} gacha ishlaydi.`}
+                </p>
 
                 <button
                   type="submit"

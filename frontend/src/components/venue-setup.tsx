@@ -1,11 +1,20 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import { CalendarDays, ChevronLeft, ChevronRight, Clock, LayoutGrid, Pencil, Users, X } from "lucide-react";
+import { CalendarDays, ChevronLeft, ChevronRight, LayoutGrid, Pencil, Users, X } from "lucide-react";
 
 import { AmountInput } from "@/components/amount-input";
+import { TimePicker, formatHours } from "@/components/time-picker";
 import { catalogService, ServiceCatalogRead } from "@/lib/api";
 import { formatMoney } from "@/lib/format";
+
+/** One tap for the usual days; equal times are round the clock. */
+const HOUR_PRESETS = [
+  { label: "09:00 - 18:00", opens: "09:00", closes: "18:00" },
+  { label: "10:00 - 23:00", opens: "10:00", closes: "23:00" },
+  { label: "10:00 - 02:00", opens: "10:00", closes: "02:00" },
+  { label: "24 soat", opens: "00:00", closes: "00:00" },
+];
 
 /** Monday first, as the API numbers them (`weekday` 0 = Dushanba). */
 export const WEEKDAY_SHORT = ["Dush", "Sesh", "Chor", "Pay", "Jum", "Shan", "Yak"];
@@ -209,7 +218,7 @@ export function VenueSetup({ isDark, kind, value, onChange, onBack, onDone, init
     const capacityText = value.capacityMax
       ? `${value.capacityMin ? `${value.capacityMin} - ` : ""}${value.capacityMax} ta joy`
       : "";
-    const hoursText = value.opens && value.closes ? `${value.opens} - ${value.closes}` : "";
+    const hoursText = formatHours(value.opens, value.closes);
     return layout(
       <>
         {header("Vaqt & Zal sozlamalari", onBack)}
@@ -368,30 +377,45 @@ export function VenueSetup({ isDark, kind, value, onChange, onBack, onDone, init
         {header("Vaqt sozlamalari", () => go("hub"))}
         {errorBox}
         <div className="space-y-5 text-left">
+          <div className="flex flex-wrap gap-2">
+            {HOUR_PRESETS.map((preset) => {
+              const selected = preset.opens === opens && preset.closes === closes;
+              return (
+                <button
+                  key={preset.label}
+                  type="button"
+                  onClick={() => {
+                    setOpens(preset.opens);
+                    setCloses(preset.closes);
+                  }}
+                  className={`px-3.5 py-2 rounded-full border text-xs font-bold cursor-pointer transition-all ${
+                    selected
+                      ? "bg-[#FF5A00] border-[#FF5A00] text-white"
+                      : isDark
+                        ? "border-white/20 text-white/80"
+                        : "border-zinc-300 text-zinc-700"
+                  }`}
+                >
+                  {preset.label}
+                </button>
+              );
+            })}
+          </div>
           {[
             { label: "Ish boshlash vaqti", value: opens, set: setOpens },
             { label: "Ish tugash vaqti", value: closes, set: setCloses },
           ].map((field) => (
-            <label key={field.label} className="block">
+            <div key={field.label}>
               <span className={labelClass}>{field.label}</span>
-              <div className={`${fieldClass} flex items-center gap-2`}>
-                <input
-                  type="time"
-                  value={field.value}
-                  onChange={(e) => field.set(e.target.value)}
-                  className="flex-1 min-w-0 bg-transparent outline-none [&::-webkit-calendar-picker-indicator]:opacity-0"
-                />
-                <Clock className={`h-5 w-5 ${muted}`} />
-              </div>
-            </label>
+              <TimePicker isDark={isDark} value={field.value} onChange={field.set} title={field.label} className={fieldClass} />
+            </div>
           ))}
+          {opens && closes && closes < opens && (
+            <p className={`text-[11px] ${muted}`}>Tun yarmidan keyin yopiladi — ertasi kuni {closes} gacha ishlaydi.</p>
+          )}
         </div>
       </>,
       primaryButton("Tasdiqlash", Boolean(opens && closes), () => {
-        if (opens === closes) {
-          setError("Boshlash va tugash vaqti bir xil bo'lmasligi kerak!");
-          return;
-        }
         onChange({ ...value, opens, closes });
         go("hub");
       }),
