@@ -18,9 +18,14 @@ export function slotsFor(
   const day = hours.find((h) => h.weekday === weekday);
   if (!day || day.is_closed || !day.opens_at || !day.closes_at) return [];
   const open = Number(day.opens_at.slice(0, 2)) + (day.opens_at.slice(3, 5) === "00" ? 0 : 1);
-  const close = Number(day.closes_at.slice(0, 2));
+  let close = Number(day.closes_at.slice(0, 2));
+  // Closing at or before opening runs past midnight (10:00-02:00, or 00:00-00:00
+  // for round the clock). A booking still has to end the same day — the API
+  // takes an end after its start — so the last end is 23:00.
+  if (day.closes_at.slice(0, 5) <= day.opens_at.slice(0, 5)) close += 24;
+  const lastEnd = Math.min(close, 23);
   const slots: string[] = [];
-  for (let hour = open; hour + durationHours <= close; hour++) {
+  for (let hour = open; hour + durationHours <= lastEnd; hour++) {
     slots.push(`${String(hour).padStart(2, "0")}:00`);
   }
   return slots;

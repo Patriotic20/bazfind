@@ -16,8 +16,9 @@ import {
   VenueGuestTierRead,
   VenueServiceRead,
 } from "@/lib/api";
-import { formatDate, formatMoney, formatTime, parseApiDate } from "@/lib/format";
+import { formatDate, formatMoney, formatTime } from "@/lib/format";
 import { addHours, slotsFor, upcomingDates, weekdayOf } from "@/lib/venue-hours";
+import { DateCalendar } from "@/components/date-calendar";
 
 interface ToyxonaFlowModalProps {
   isOpen: boolean;
@@ -28,8 +29,8 @@ interface ToyxonaFlowModalProps {
 
 /** A hall event runs most of a day; the slots offered are start times it fits. */
 const EVENT_HOURS = 5;
-const WEEKDAY_SHORT = ["Dush", "Sesh", "Chor", "Pay", "Jum", "Shan", "Yak"];
-const BOOKABLE_DAYS = 30;
+/** A to'yxona is booked months ahead; a year is as far as the calendar goes. */
+const BOOKABLE_DAYS = 365;
 
 type Step = 1 | 2 | 3 | 4 | 5;
 
@@ -60,11 +61,13 @@ export default function ToyxonaFlowModal({ isOpen, onClose, detail, theme = "lig
   const [blocked, setBlocked] = useState<Set<string>>(new Set());
   const [services, setServices] = useState<VenueServiceRead[]>([]);
 
-  const dates = upcomingDates(venue.min_advance_booking_days, BOOKABLE_DAYS);
-  const openDates = dates.filter((d) => !blocked.has(d) && slotsFor(detail.working_hours, weekdayOf(d), EVENT_HOURS).length > 0);
+  const [firstDate] = upcomingDates(venue.min_advance_booking_days, 1);
+  const [lastDate] = upcomingDates(venue.min_advance_booking_days + BOOKABLE_DAYS - 1, 1);
+  const isUnavailable = (date: string) =>
+    blocked.has(date) || slotsFor(detail.working_hours, weekdayOf(date), EVENT_HOURS).length === 0;
   const [pickedDate, setPickedDate] = useState("");
   const [pickedTime, setPickedTime] = useState("");
-  const selectedDate = openDates.includes(pickedDate) ? pickedDate : "";
+  const selectedDate = pickedDate && !isUnavailable(pickedDate) ? pickedDate : "";
   const times = selectedDate ? slotsFor(detail.working_hours, weekdayOf(selectedDate), EVENT_HOURS) : [];
   const selectedTime = times.includes(pickedTime) ? pickedTime : "";
 
@@ -81,21 +84,20 @@ export default function ToyxonaFlowModal({ isOpen, onClose, detail, theme = "lig
   const [created, setCreated] = useState<BookingOwnerDetail | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (!isOpen) return;
-    const first = dates[0];
-    const last = dates[dates.length - 1];
+  // Booked days are asked for a month at a time, as the calendar shows them.
+  const loadBlocked = (first: string, last: string) => {
     venueService
       .getAvailability(venue.id, first, last)
-      .then((res) => setBlocked(new Set(res.dates)))
-      .catch(() => setBlocked(new Set()));
+      .then((res) => setBlocked((prev) => new Set([...prev, ...res.dates])))
+      .catch(() => {});
+  };
+
+  useEffect(() => {
+    if (!isOpen) return;
     venueService
       .getServices(venue.id, venue.venue_group_id)
       .then((list) => setServices(list.filter((s) => s.is_active)))
       .catch(() => setServices([]));
-    // The window is fixed for the life of the modal; re-asking on every render
-    // would only repeat the same question.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, venue.id, venue.venue_group_id]);
 
   useEffect(() => {
@@ -261,59 +263,54 @@ export default function ToyxonaFlowModal({ isOpen, onClose, detail, theme = "lig
           <div className="flex-1 flex flex-col overflow-hidden">
             <div className="flex-1 overflow-y-auto px-4 sm:px-5 py-4 space-y-6 scrollbar-none">
               <div className="space-y-3">
-                <h3 className="text-base font-bold">Sanani belgilash</h3>
-                {openDates.length === 0 ? (
-                  <p className="text-xs font-semibold text-zinc-400">Yaqin {BOOKABLE_DAYS} kunda bo&apos;sh sana yo&apos;q</p>
-                ) : (
-                  <div className="flex gap-2.5 overflow-x-auto pb-1 scrollbar-none">
-                    {openDates.map((date) => {
-                      const isSelected = selectedDate === date;
-                      return (
-                        <button
-                          key={date}
-                          type="button"
-                          onClick={() => setPickedDate(date)}
-                          className={`w-[54px] sm:w-[58px] h-[82px] rounded-[18px] flex flex-col items-center justify-center shrink-0 transition-all cursor-pointer ${
-                            isSelected ? "bg-[#FF5A00] text-white shadow-md shadow-[#FF5A00]/25" : surface
-                          }`}
-                        >
-                          {isSelected ? <Check className="w-3.5 h-3.5 stroke-[3] mb-0.5" /> : <div className="w-3.5 h-3.5 mb-0.5" />}
-                          <span className={`text-[11px] font-medium leading-none mb-1.5 ${isSelected ? "" : "text-zinc-400 dark:text-zinc-500"}`}>
-                            {WEEKDAY_SHORT[weekdayOf(date)]}
-                          </span>
-                          <span className="text-xl font-bold leading-none">{parseApiDate(date).getDate()}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-                {blocked.size > 0 && <p className="text-[11px] text-zinc-400">Band qilingan sanalar ko&apos;rsatilmaydi.</p>}
+                <h3 className="text-base font-bold">To&apos;y sanasi</h3>
+                <DateCalendar
+                  isDark={isDark}
+                  value={selectedDate}
+                  onChange={setPickedDate}
+                  minDate={firstDate}
+                  maxDate={lastDate}
+                  isDisabled={isUnavailable}
+                  onMonthChange={loadBlocked}
+                />
+                <p className="text-[11px] text-zinc-400">
+                  Chizilgan kunlar band yoki dam olish kuni.
+                  {venue.min_advance_booking_days > 0 && ` Kamida ${venue.min_advance_booking_days} kun oldin bron qilinadi.`}
+                </p>
               </div>
 
-              {selectedDate && (
-                <div className="space-y-3 pt-1">
-                  <h3 className="text-base font-bold">Boshlanish vaqti</h3>
-                  <div className="grid grid-cols-4 gap-2.5">
-                    {times.map((t) => {
-                      const isSelected = selectedTime === t;
-                      return (
-                        <button
-                          key={t}
-                          type="button"
-                          onClick={() => setPickedTime(t)}
-                          className={`py-2.5 px-2 rounded-full flex items-center justify-center gap-1 transition-all text-xs font-semibold cursor-pointer ${
-                            isSelected ? "bg-[#FF5A00] text-white font-bold shadow-md shadow-[#FF5A00]/25" : surface
-                          }`}
-                        >
-                          {isSelected && <Check className="w-3 h-3 stroke-[3] shrink-0" />}
-                          <span>{t}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                  <p className="text-[11px] text-zinc-400">Tadbir {EVENT_HOURS} soat davom etadi.</p>
-                </div>
-              )}
+              <div className="space-y-3 pt-1">
+                <h3 className="text-base font-bold">To&apos;y qachon boshlanadi?</h3>
+                {!selectedDate ? (
+                  <p className="text-xs font-semibold text-zinc-400">Avval sanani tanlang.</p>
+                ) : (
+                  <>
+                    <div className="grid grid-cols-4 gap-2.5">
+                      {times.map((t) => {
+                        const isSelected = selectedTime === t;
+                        return (
+                          <button
+                            key={t}
+                            type="button"
+                            onClick={() => setPickedTime(t)}
+                            className={`py-2.5 px-2 rounded-full flex items-center justify-center gap-1 transition-all text-xs font-semibold cursor-pointer ${
+                              isSelected ? "bg-[#FF5A00] text-white font-bold shadow-md shadow-[#FF5A00]/25" : surface
+                            }`}
+                          >
+                            {isSelected && <Check className="w-3 h-3 stroke-[3] shrink-0" />}
+                            <span>{t}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <p className="text-[11px] text-zinc-400">
+                      {selectedTime
+                        ? `To'y ${selectedTime} da boshlanib, taxminan ${addHours(selectedTime, EVENT_HOURS)} gacha davom etadi.`
+                        : `Tadbir ${EVENT_HOURS} soat davom etadi.`}
+                    </p>
+                  </>
+                )}
+              </div>
             </div>
             <div className={footer}>
               <button disabled={!selectedDate || !selectedTime} onClick={() => setStep(2)} className={primary(Boolean(selectedDate && selectedTime))}>
