@@ -90,18 +90,20 @@ export function VenueServicesEditor({ isDark, venueId, groupId, fieldClass, show
       showToast("Har bir taomning nomi va narxini kiriting");
       return;
     }
+    // A table spread is priced per head; everything else once per event.
+    const unit = withDishes ? "per_guest" : "flat";
     const items = withDishes
       ? filled.map((d, i) => ({ name: d.name.trim(), price: Number(d.price), sort_order: i }))
       : [];
     setSaving(true);
     try {
       if (sheet.editing) {
-        await catalogService.updateVenueService(sheet.editing.id, { price: Number(price), items }, venueId);
+        await catalogService.updateVenueService(sheet.editing.id, { price: Number(price), price_unit: unit, items }, venueId);
         showToast("Xizmat saqlandi");
       } else {
         if (!catalogId) return;
         await catalogService.createVenueService(
-          { service_catalog_id: catalogId, price: Number(price), sort_order: services?.length ?? 0, items },
+          { service_catalog_id: catalogId, price: Number(price), price_unit: unit, sort_order: services?.length ?? 0, items },
           venueId,
           groupId,
         );
@@ -146,7 +148,10 @@ export function VenueServicesEditor({ isDark, venueId, groupId, fieldClass, show
             <button key={service.id} type="button" onClick={() => openEdit(service)} className={card}>
               <span className="min-w-0">
                 <span className="text-sm font-bold block truncate">{service.name}</span>
-                <span className="text-xs text-[#FF5A00] font-bold block">{formatMoney(service.price, service.currency)}</span>
+                <span className="text-xs text-[#FF5A00] font-bold block">
+                  {formatMoney(service.price, service.currency)}
+                  {service.price_unit === "per_guest" && " / kishi"}
+                </span>
                 {service.items && service.items.length > 0 && (
                   <span className="text-[11px] text-zinc-400 block truncate">{service.items.map((i) => i.name).join(", ")}</span>
                 )}
@@ -211,7 +216,7 @@ export function VenueServicesEditor({ isDark, venueId, groupId, fieldClass, show
             )}
 
             <label className="block">
-              <span className="text-xs font-bold opacity-60 block mb-1">Narxi (UZS)</span>
+              <span className="text-xs font-bold opacity-60 block mb-1">{withDishes ? "1 kishi uchun narx (UZS)" : "Narxi (UZS)"}</span>
               <AmountInput value={price} onChange={setPrice} placeholder="Masalan: 14 000 000" className={fieldClass} />
             </label>
 

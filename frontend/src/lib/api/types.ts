@@ -254,6 +254,7 @@ export interface VenueServiceRead {
 /** Only the fields sent change; `items`, when sent, replaces the whole list. */
 export interface VenueServiceUpdate {
   price?: number | string;
+  price_unit?: ServicePriceUnit;
   is_active?: boolean;
   sort_order?: number;
   items?: VenueServiceItemCreate[];

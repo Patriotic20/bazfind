@@ -47,6 +47,7 @@ import {
   isVenueSetupComplete,
   tableCountsPayload,
   tableSeats,
+  isDasturxonSlug,
 } from "@/components/venue-setup";
 import { formatPhone, toE164 } from "@/lib/phone";
 import {
@@ -1002,6 +1003,8 @@ export default function LoginPage() {
             {
               service_catalog_id: service.catalogId,
               price: Number(service.price),
+              // A table spread is priced per head; everything else once per event.
+              price_unit: isDasturxonSlug(service.slug) ? "per_guest" : "flat",
               sort_order: index,
               items: service.items.map((item, i) => ({ name: item.name, price: Number(item.price), sort_order: i })),
             },

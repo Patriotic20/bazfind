@@ -512,6 +512,7 @@ export function VenueSetup({ isDark, kind, value, onChange, onBack, onDone, init
                 <button type="button" onClick={edit} className={`${fieldClass} flex items-center justify-between cursor-pointer`}>
                   <span>
                     {formatMoney(service.price)}
+                    {isDasturxonSlug(service.slug) && " / kishi"}
                     {service.items.length > 0 && <span className={`ml-2 text-xs ${muted}`}>· {service.items.length} ta taom</span>}
                   </span>
                   <Pencil className={`h-4 w-4 ${muted}`} />
@@ -592,7 +593,13 @@ export function VenueSetup({ isDark, kind, value, onChange, onBack, onDone, init
       <div className="space-y-3 text-left">
         <span className={labelClass}>Qo&apos;shimcha xizmatlar</span>
         <div className={`${fieldClass} ${isDark ? "text-white/80" : "text-zinc-700"}`}>{formService?.name}</div>
-        <AmountInput value={formPrice} onChange={setFormPrice} placeholder="Xizmat narxini yozing" className={fieldClass} />
+        {isDasturxon && <span className={`block text-xs font-bold ${muted}`}>1 kishi uchun narx</span>}
+        <AmountInput
+          value={formPrice}
+          onChange={setFormPrice}
+          placeholder={isDasturxon ? "Masalan: 150 000" : "Xizmat narxini yozing"}
+          className={fieldClass}
+        />
 
         {isDasturxon && (
           <div className="space-y-3 pt-2">

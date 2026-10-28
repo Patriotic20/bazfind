@@ -108,9 +108,16 @@ export default function ToyxonaFlowModal({ isOpen, onClose, detail, theme = "lig
   const timesDay = selectedDate || week.find((d) => !isUnavailable(d)) || "";
   const timeStrip = timesDay ? startTimes(detail.working_hours, weekdayOf(timesDay), MIN_EVENT_HOURS, SLOT_MINUTES) : [];
 
-  const [tierId, setTierId] = useState<number | null>(tiers[0]?.id ?? null);
-  const tier = tiers.find((t) => t.id === tierId) ?? null;
-  const [guests, setGuests] = useState(tiers[0]?.min_guests ?? 0);
+  // The guest count is typed; the band follows from it rather than being picked.
+  const minGuests = tiers.length ? Math.min(...tiers.map((t) => t.min_guests)) : 0;
+  const maxGuests = tiers.some((t) => t.max_guests === null)
+    ? (venue.capacity_max ?? Math.max(...tiers.map((t) => t.min_guests)) + 1000)
+    : Math.max(0, ...tiers.map((t) => t.max_guests ?? 0));
+  const [guestsText, setGuestsText] = useState(minGuests ? String(minGuests) : "");
+  const guests = Number(guestsText) || 0;
+  const tier =
+    tiers.find((t) => guests >= t.min_guests && (t.max_guests === null || guests <= t.max_guests)) ?? null;
+  const guestsInRange = guests >= minGuests && guests <= maxGuests && tier !== null;
 
   const [chosenServices, setChosenServices] = useState<Set<number>>(new Set());
   const [fullName, setFullName] = useState(user ? `${user.first_name} ${user.last_name}`.trim() : "");
@@ -154,11 +161,10 @@ export default function ToyxonaFlowModal({ isOpen, onClose, detail, theme = "lig
 
   if (!isOpen) return null;
 
-  const chooseTier = (next: VenueGuestTierRead) => {
-    setTierId(next.id);
-    setGuests(next.min_guests);
-  };
-  const maxGuests = tier?.max_guests ?? venue.capacity_max ?? (tier ? tier.min_guests + 500 : 0);
+  const setGuests = (value: number) => setGuestsText(String(Math.min(maxGuests, Math.max(minGuests, value))));
+  const guestPresets = [100, 200, 300, 500, 800].filter((n) => n >= minGuests && n <= maxGuests);
+  // The table spreads are what a guest count actually costs per head.
+  const perGuestServices = services.filter((s) => s.price_unit === "per_guest");
 
   const pickedServices = services.filter((s) => chosenServices.has(s.id));
   const hallPrice = tier ? Number(tier.base_price) : 0;
@@ -474,55 +480,92 @@ export default function ToyxonaFlowModal({ isOpen, onClose, detail, theme = "lig
           <div className="flex-1 flex flex-col overflow-hidden">
             <div className="flex-1 overflow-y-auto px-4 sm:px-5 py-4 space-y-4 scrollbar-none">
               <div>
-                <h2 className="text-base font-bold tracking-tight">Mehmonlar sonini tanlang</h2>
+                <h2 className="text-base font-bold tracking-tight">Mehmonlar soni</h2>
                 <p className="text-xs text-zinc-400 dark:text-zinc-500 mt-1 leading-relaxed">
-                  Zal narxi mehmonlar soniga qarab belgilanadi.
+                  {tiers.length ? `Zal ${minGuests} – ${maxGuests} mehmonni qabul qiladi.` : "Bu zal hali narxlarni kiritmagan."}
                 </p>
               </div>
 
-              {tiers.length === 0 ? (
-                <p className="text-xs font-semibold text-zinc-400">Bu zal hali narxlarni kiritmagan.</p>
-              ) : (
-                <div className="space-y-3 pt-1">
-                  {tiers.map((t) => (
-                    <div key={t.id} onClick={() => chooseTier(t)} className={card(tierId === t.id)}>
-                      <div>
-                        <span className="text-sm font-bold block">{tierLabel(t)}</span>
-                        <span className="text-xs text-zinc-400 dark:text-zinc-500 mt-0.5 block">
-                          Zal narxi: {formatMoney(t.base_price, venue.currency)}
-                        </span>
-                      </div>
-                      <div className={radio(tierId === t.id)}>{tierId === t.id && <Check className="w-3 h-3 stroke-[3]" />}</div>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {tier && (
-                <div className="flex justify-between items-center pt-2">
-                  <span className="text-sm font-bold">Aniq mehmonlar soni</span>
+              {tiers.length > 0 && (
+                <>
                   <div className="flex items-center gap-3">
                     <button
                       type="button"
-                      onClick={() => setGuests((g) => Math.max(tier.min_guests, g - 10))}
-                      className={`w-9 h-9 rounded-xl font-black ${surface}`}
+                      onClick={() => setGuests(guests - 10)}
+                      className={`w-12 h-12 rounded-2xl text-xl font-black cursor-pointer ${surface}`}
+                      aria-label="10 ta kamaytirish"
                     >
-                      —
+                      −
                     </button>
-                    <span className="text-base font-black w-12 text-center">{guests}</span>
+                    <input
+                      inputMode="numeric"
+                      value={guestsText}
+                      onChange={(e) => setGuestsText(e.target.value.replace(/\D/g, "").slice(0, 5))}
+                      onBlur={() => guestsText && setGuests(guests)}
+                      placeholder={String(minGuests)}
+                      className={`flex-1 min-w-0 h-12 rounded-2xl text-center text-xl font-black outline-none border-2 focus:border-[#FF5A00] ${
+                        isDark ? "bg-[#2A2A2A] border-transparent text-white" : "bg-[#F5F5F7] border-transparent text-zinc-900"
+                      } ${guestsText && !guestsInRange ? "!border-red-400" : ""}`}
+                      aria-label="Mehmonlar soni"
+                    />
                     <button
                       type="button"
-                      onClick={() => setGuests((g) => Math.min(maxGuests, g + 10))}
-                      className={`w-9 h-9 rounded-xl font-black ${surface}`}
+                      onClick={() => setGuests(guests + 10)}
+                      className={`w-12 h-12 rounded-2xl text-xl font-black cursor-pointer ${surface}`}
+                      aria-label="10 ta ko'paytirish"
                     >
                       +
                     </button>
                   </div>
-                </div>
+                  {guestsText && !guestsInRange && (
+                    <p className="text-xs font-semibold text-red-500">
+                      {minGuests} dan {maxGuests} gacha mehmon kiriting.
+                    </p>
+                  )}
+                  {guestPresets.length > 0 && (
+                    <div className="flex flex-wrap gap-2">
+                      {guestPresets.map((n) => (
+                        <button
+                          key={n}
+                          type="button"
+                          onClick={() => setGuests(n)}
+                          className={`px-4 py-2 rounded-full text-xs font-bold cursor-pointer transition-all ${
+                            guests === n ? "bg-[#FF5A00] text-white" : surface
+                          }`}
+                        >
+                          {n} kishi
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {guestsInRange && (perGuestServices.length > 0 || (tier && Number(tier.base_price) > 0)) && (
+                    <div className={`rounded-2xl p-4 space-y-2.5 ${isDark ? "bg-white/5" : "bg-zinc-50 border border-zinc-200"}`}>
+                      {perGuestServices.map((s) => (
+                        <div key={s.id} className="flex items-start justify-between gap-3 text-xs">
+                          <span className="min-w-0">
+                            <span className="font-bold block">{s.name}</span>
+                            <span className="text-zinc-400">1 kishi: {formatMoney(s.price, s.currency)}</span>
+                          </span>
+                          <span className="font-black text-[#FF5A00] shrink-0">{formatMoney(Number(s.price) * guests, s.currency)}</span>
+                        </div>
+                      ))}
+                      {tier && Number(tier.base_price) > 0 && (
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="font-bold">Zal ijarasi</span>
+                          <span className="font-black">{formatMoney(tier.base_price, venue.currency)}</span>
+                        </div>
+                      )}
+                      {perGuestServices.length > 0 && (
+                        <p className="text-[11px] text-zinc-400">Dasturxon keyingi qadamda tanlanadi; narx {guests} kishi uchun hisoblangan.</p>
+                      )}
+                    </div>
+                  )}
+                </>
               )}
             </div>
             <div className={footer}>
-              <button disabled={!tier} onClick={() => setStep(3)} className={primary(Boolean(tier))}>
+              <button disabled={!guestsInRange} onClick={() => setStep(3)} className={primary(guestsInRange)}>
                 Keyingisi
               </button>
             </div>
@@ -630,7 +673,7 @@ export default function ToyxonaFlowModal({ isOpen, onClose, detail, theme = "lig
               <div className={`rounded-2xl border p-4 space-y-2.5 ${isDark ? "border-white/10" : "border-zinc-200"}`}>
                 {row("Sana:", `${formatDate(selectedDate)} • ${selectedTime}–${selectedEnd}`)}
                 {row("Mehmonlar:", `${guests} kishi`)}
-                {row(`Zal ijarasi (${tierLabel(tier)}):`, formatMoney(hallPrice, venue.currency))}
+                {hallPrice > 0 && row(`Zal ijarasi (${tierLabel(tier)}):`, formatMoney(hallPrice, venue.currency))}
                 {pickedServices.map((s) =>
                   row(
                     `${s.name}${s.price_unit === "per_guest" ? ` × ${guests}` : ""}:`,
