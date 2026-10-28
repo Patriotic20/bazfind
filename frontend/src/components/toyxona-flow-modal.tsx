@@ -17,7 +17,7 @@ import {
   VenueServiceRead,
 } from "@/lib/api";
 import { formatDate, formatMoney, formatTime, parseApiDate, toApiDate } from "@/lib/format";
-import { addHours, slotsFor, startTimes, upcomingDates, weekOf, weekdayOf } from "@/lib/venue-hours";
+import { addHours, endTimes, minutesBetween, slotsFor, startTimes, upcomingDates, weekOf, weekdayOf } from "@/lib/venue-hours";
 import { DateCalendar } from "@/components/date-calendar";
 
 /** `YYYY-MM-DD` moved by `days`. */
@@ -34,8 +34,9 @@ interface ToyxonaFlowModalProps {
   theme?: string;
 }
 
-/** A hall event runs most of a day; the slots offered are start times it fits. */
-const EVENT_HOURS = 5;
+/** The shortest event a hall takes, and the end offered first after a start. */
+const MIN_EVENT_HOURS = 2;
+const DEFAULT_EVENT_HOURS = 5;
 /** Start times are offered every half hour. */
 const SLOT_MINUTES = 30;
 const WEEKDAY_SHORT = ["Dush", "Sesh", "Chor", "Pay", "Jum", "Shan", "Yak"];
@@ -77,19 +78,35 @@ export default function ToyxonaFlowModal({ isOpen, onClose, detail, theme = "lig
     date < firstDate ||
     date > lastDate ||
     blocked.has(date) ||
-    slotsFor(detail.working_hours, weekdayOf(date), EVENT_HOURS, SLOT_MINUTES).length === 0;
+    slotsFor(detail.working_hours, weekdayOf(date), MIN_EVENT_HOURS, SLOT_MINUTES).length === 0;
   const [pickedDate, setPickedDate] = useState("");
   const [pickedTime, setPickedTime] = useState("");
   const selectedDate = pickedDate && !isUnavailable(pickedDate) ? pickedDate : "";
-  const times = selectedDate ? slotsFor(detail.working_hours, weekdayOf(selectedDate), EVENT_HOURS, SLOT_MINUTES) : [];
+  const times = selectedDate ? slotsFor(detail.working_hours, weekdayOf(selectedDate), MIN_EVENT_HOURS, SLOT_MINUTES) : [];
   const selectedTime = times.includes(pickedTime) ? pickedTime : "";
+  const endsFor = (start: string) =>
+    selectedDate ? endTimes(detail.working_hours, weekdayOf(selectedDate), start, MIN_EVENT_HOURS, SLOT_MINUTES) : [];
+  const ends = selectedTime ? endsFor(selectedTime) : [];
+  const [pickedEnd, setPickedEnd] = useState("");
+  const selectedEnd = ends.includes(pickedEnd) ? pickedEnd : "";
+  const durationText = (start: string, end: string) => {
+    const hours = minutesBetween(start, end) / 60;
+    return `${Number.isInteger(hours) ? hours : hours.toFixed(1).replace(".", ",")} soat`;
+  };
+  const chooseStart = (start: string) => {
+    setPickedTime(start);
+    // A typical wedding length is offered straight away; the end stays editable.
+    const options = endsFor(start);
+    const usual = addHours(start, DEFAULT_EVENT_HOURS);
+    setPickedEnd(options.includes(usual) ? usual : (options[options.length - 1] ?? ""));
+  };
   // The strip shows one week — this one until another is picked from the calendar.
   const [weekAnchor, setWeekAnchor] = useState(() => toApiDate(new Date()));
   const week = weekOf(weekAnchor);
   const [showCalendar, setShowCalendar] = useState(false);
   // Before a day is picked the times are shown greyed, from the week's first open day.
   const timesDay = selectedDate || week.find((d) => !isUnavailable(d)) || "";
-  const timeStrip = timesDay ? startTimes(detail.working_hours, weekdayOf(timesDay), EVENT_HOURS, SLOT_MINUTES) : [];
+  const timeStrip = timesDay ? startTimes(detail.working_hours, weekdayOf(timesDay), MIN_EVENT_HOURS, SLOT_MINUTES) : [];
 
   const [tierId, setTierId] = useState<number | null>(tiers[0]?.id ?? null);
   const tier = tiers.find((t) => t.id === tierId) ?? null;
@@ -159,14 +176,14 @@ export default function ToyxonaFlowModal({ isOpen, onClose, detail, theme = "lig
       router.push("/login");
       return;
     }
-    if (!tier || !selectedDate || !selectedTime) return;
+    if (!tier || !selectedDate || !selectedTime || !selectedEnd) return;
     setSubmitting(true);
     try {
       const result = await bookingService.bookHall({
         venue_id: venue.id,
         booking_date: selectedDate,
         start_time: `${selectedTime}:00`,
-        end_time: `${addHours(selectedTime, EVENT_HOURS)}:00`,
+        end_time: `${selectedEnd}:00`,
         guests_count: guests,
         contact_name: fullName.trim(),
         contact_phone: toE164(phone) ?? "",
@@ -202,6 +219,14 @@ export default function ToyxonaFlowModal({ isOpen, onClose, detail, theme = "lig
         : isDark
           ? "bg-[#382218] text-white/40 cursor-not-allowed"
           : "bg-[#FFD6BF] text-white cursor-not-allowed"
+    }`;
+  const timeChip = (selected: boolean, enabled: boolean) =>
+    `py-2.5 px-4 rounded-xl flex items-center justify-center gap-1 shrink-0 transition-all text-sm font-bold ${
+      selected
+        ? "bg-[#FF5A00] text-white shadow-md shadow-[#FF5A00]/25 cursor-pointer"
+        : enabled
+          ? `${surface} text-[#FF5A00] cursor-pointer`
+          : `${isDark ? "bg-[#2A2A2A]/50" : "bg-[#F5F5F7]/60"} text-zinc-400/50 cursor-not-allowed`
     }`;
   const footer = `p-4 border-t shrink-0 z-20 ${isDark ? "bg-[#1E1E1E] border-white/5" : "bg-white border-zinc-100"}`;
   const row = (label: string, value: React.ReactNode, key?: string | number) => (
@@ -396,43 +421,48 @@ export default function ToyxonaFlowModal({ isOpen, onClose, detail, theme = "lig
                   <p className="text-xs font-semibold text-zinc-400">Bu haftada bo&apos;sh kun yo&apos;q — kalendardan boshqa sanani tanlang.</p>
                 ) : (
                   <>
+                    <span className="text-xs font-bold text-zinc-400 block">Boshlanishi</span>
                     <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none">
                       {timeStrip.map(({ time, fits }) => {
-                        const isSelected = selectedTime === time;
                         const enabled = Boolean(selectedDate) && fits;
                         return (
-                          <button
-                            key={time}
-                            type="button"
-                            disabled={!enabled}
-                            onClick={() => setPickedTime(time)}
-                            className={`py-2.5 px-4 rounded-xl flex items-center justify-center gap-1 shrink-0 transition-all text-sm font-bold ${
-                              isSelected
-                                ? "bg-[#FF5A00] text-white shadow-md shadow-[#FF5A00]/25 cursor-pointer"
-                                : enabled
-                                  ? `${surface} text-[#FF5A00] cursor-pointer`
-                                  : `${isDark ? "bg-[#2A2A2A]/50" : "bg-[#F5F5F7]/60"} text-zinc-400/50 cursor-not-allowed`
-                            }`}
-                          >
-                            {isSelected && <Check className="w-3.5 h-3.5 stroke-[3] shrink-0" />}
+                          <button key={time} type="button" disabled={!enabled} onClick={() => chooseStart(time)} className={timeChip(selectedTime === time, enabled)}>
+                            {selectedTime === time && <Check className="w-3.5 h-3.5 stroke-[3] shrink-0" />}
                             <span>{time}</span>
                           </button>
                         );
                       })}
                     </div>
+
+                    <span className="text-xs font-bold text-zinc-400 block pt-1">Tugashi</span>
+                    {ends.length === 0 ? (
+                      <p className="text-xs text-zinc-400">{selectedDate ? "Avval boshlanish vaqtini tanlang." : "Avval sanani tanlang."}</p>
+                    ) : (
+                      <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none">
+                        {ends.map((time) => (
+                          <button key={time} type="button" onClick={() => setPickedEnd(time)} className={timeChip(selectedEnd === time, true)}>
+                            {selectedEnd === time && <Check className="w-3.5 h-3.5 stroke-[3] shrink-0" />}
+                            <span>{time}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+
                     <p className="text-[11px] text-zinc-400">
-                      {!selectedDate
-                        ? "Avval sanani tanlang."
-                        : selectedTime
-                          ? `To'y ${selectedTime} da boshlanib, taxminan ${addHours(selectedTime, EVENT_HOURS)} gacha davom etadi.`
-                          : `Tadbir ${EVENT_HOURS} soat davom etadi.`}
+                      {selectedTime && selectedEnd
+                        ? `To'y ${selectedTime} – ${selectedEnd} (${durationText(selectedTime, selectedEnd)}).`
+                        : `Kamida ${MIN_EVENT_HOURS} soat.`}
                     </p>
                   </>
                 )}
               </div>
             </div>
             <div className={footer}>
-              <button disabled={!selectedDate || !selectedTime} onClick={() => setStep(2)} className={primary(Boolean(selectedDate && selectedTime))}>
+              <button
+                disabled={!selectedDate || !selectedTime || !selectedEnd}
+                onClick={() => setStep(2)}
+                className={primary(Boolean(selectedDate && selectedTime && selectedEnd))}
+              >
                 Keyingisi
               </button>
             </div>
@@ -598,7 +628,7 @@ export default function ToyxonaFlowModal({ isOpen, onClose, detail, theme = "lig
               </div>
 
               <div className={`rounded-2xl border p-4 space-y-2.5 ${isDark ? "border-white/10" : "border-zinc-200"}`}>
-                {row("Sana:", `${formatDate(selectedDate)} • ${selectedTime}–${addHours(selectedTime, EVENT_HOURS)}`)}
+                {row("Sana:", `${formatDate(selectedDate)} • ${selectedTime}–${selectedEnd}`)}
                 {row("Mehmonlar:", `${guests} kishi`)}
                 {row(`Zal ijarasi (${tierLabel(tier)}):`, formatMoney(hallPrice, venue.currency))}
                 {pickedServices.map((s) =>
