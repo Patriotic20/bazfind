@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { X, ChevronLeft, Check, CheckCircle, Loader2, Sparkles } from "lucide-react";
+import { X, ChevronLeft, ChevronRight, CalendarDays, Check, CheckCircle, Loader2, Sparkles } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { useAuth } from "@/contexts/AuthContext";
 import { PhoneInput } from "@/components/phone-input";
@@ -16,9 +16,16 @@ import {
   VenueGuestTierRead,
   VenueServiceRead,
 } from "@/lib/api";
-import { formatDate, formatMoney, formatTime } from "@/lib/format";
-import { addHours, slotsFor, upcomingDates, weekdayOf } from "@/lib/venue-hours";
+import { formatDate, formatMoney, formatTime, parseApiDate, toApiDate } from "@/lib/format";
+import { addHours, slotsFor, startTimes, upcomingDates, weekOf, weekdayOf } from "@/lib/venue-hours";
 import { DateCalendar } from "@/components/date-calendar";
+
+/** `YYYY-MM-DD` moved by `days`. */
+function addDays(isoDate: string, days: number): string {
+  const date = parseApiDate(isoDate);
+  date.setDate(date.getDate() + days);
+  return toApiDate(date);
+}
 
 interface ToyxonaFlowModalProps {
   isOpen: boolean;
@@ -29,6 +36,9 @@ interface ToyxonaFlowModalProps {
 
 /** A hall event runs most of a day; the slots offered are start times it fits. */
 const EVENT_HOURS = 5;
+/** Start times are offered every half hour. */
+const SLOT_MINUTES = 30;
+const WEEKDAY_SHORT = ["Dush", "Sesh", "Chor", "Pay", "Jum", "Shan", "Yak"];
 /** A to'yxona is booked months ahead; a year is as far as the calendar goes. */
 const BOOKABLE_DAYS = 365;
 
@@ -64,12 +74,22 @@ export default function ToyxonaFlowModal({ isOpen, onClose, detail, theme = "lig
   const [firstDate] = upcomingDates(venue.min_advance_booking_days, 1);
   const [lastDate] = upcomingDates(venue.min_advance_booking_days + BOOKABLE_DAYS - 1, 1);
   const isUnavailable = (date: string) =>
-    blocked.has(date) || slotsFor(detail.working_hours, weekdayOf(date), EVENT_HOURS).length === 0;
+    date < firstDate ||
+    date > lastDate ||
+    blocked.has(date) ||
+    slotsFor(detail.working_hours, weekdayOf(date), EVENT_HOURS, SLOT_MINUTES).length === 0;
   const [pickedDate, setPickedDate] = useState("");
   const [pickedTime, setPickedTime] = useState("");
   const selectedDate = pickedDate && !isUnavailable(pickedDate) ? pickedDate : "";
-  const times = selectedDate ? slotsFor(detail.working_hours, weekdayOf(selectedDate), EVENT_HOURS) : [];
+  const times = selectedDate ? slotsFor(detail.working_hours, weekdayOf(selectedDate), EVENT_HOURS, SLOT_MINUTES) : [];
   const selectedTime = times.includes(pickedTime) ? pickedTime : "";
+  // The strip shows one week — this one until another is picked from the calendar.
+  const [weekAnchor, setWeekAnchor] = useState(() => toApiDate(new Date()));
+  const week = weekOf(weekAnchor);
+  const [showCalendar, setShowCalendar] = useState(false);
+  // Before a day is picked the times are shown greyed, from the week's first open day.
+  const timesDay = selectedDate || week.find((d) => !isUnavailable(d)) || "";
+  const timeStrip = timesDay ? startTimes(detail.working_hours, weekdayOf(timesDay), EVENT_HOURS, SLOT_MINUTES) : [];
 
   const [tierId, setTierId] = useState<number | null>(tiers[0]?.id ?? null);
   const tier = tiers.find((t) => t.id === tierId) ?? null;
@@ -91,6 +111,15 @@ export default function ToyxonaFlowModal({ isOpen, onClose, detail, theme = "lig
       .then((res) => setBlocked((prev) => new Set([...prev, ...res.dates])))
       .catch(() => {});
   };
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const days = weekOf(weekAnchor);
+    venueService
+      .getAvailability(venue.id, days[0], days[6])
+      .then((res) => setBlocked((prev) => new Set([...prev, ...res.dates])))
+      .catch(() => {});
+  }, [isOpen, venue.id, weekAnchor]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -194,6 +223,33 @@ export default function ToyxonaFlowModal({ isOpen, onClose, detail, theme = "lig
         </div>
       )}
 
+      {showCalendar && (
+        <div className="fixed inset-0 z-[80] bg-black/50 flex items-end justify-center animate-fade-in">
+          <div className="absolute inset-0" onClick={() => setShowCalendar(false)} />
+          <div className={`w-full max-w-md rounded-t-[28px] p-4 pb-8 z-10 relative ${isDark ? "bg-[#1E1E1E] text-white" : "bg-white text-zinc-900"}`}>
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-base font-bold">To&apos;y sanasini tanlang</h3>
+              <button type="button" onClick={() => setShowCalendar(false)} className="p-1 text-zinc-400 cursor-pointer" aria-label="Yopish">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <DateCalendar
+              isDark={isDark}
+              value={selectedDate}
+              onChange={(date) => {
+                setPickedDate(date);
+                setWeekAnchor(date);
+                setShowCalendar(false);
+              }}
+              minDate={firstDate}
+              maxDate={lastDate}
+              isDisabled={isUnavailable}
+              onMonthChange={loadBlocked}
+            />
+          </div>
+        </div>
+      )}
+
       <div
         className={`w-full max-w-md h-full overflow-hidden flex flex-col shadow-2xl relative transition-colors duration-300 ${
           isDark ? "bg-[#1E1E1E] text-white" : "bg-white text-zinc-900"
@@ -263,50 +319,113 @@ export default function ToyxonaFlowModal({ isOpen, onClose, detail, theme = "lig
           <div className="flex-1 flex flex-col overflow-hidden">
             <div className="flex-1 overflow-y-auto px-4 sm:px-5 py-4 space-y-6 scrollbar-none">
               <div className="space-y-3">
-                <h3 className="text-base font-bold">To&apos;y sanasi</h3>
-                <DateCalendar
-                  isDark={isDark}
-                  value={selectedDate}
-                  onChange={setPickedDate}
-                  minDate={firstDate}
-                  maxDate={lastDate}
-                  isDisabled={isUnavailable}
-                  onMonthChange={loadBlocked}
-                />
+                <div className="flex items-center justify-between">
+                  <h3 className="text-base font-bold">Sanani belgilash</h3>
+                  <div className="flex items-center gap-1">
+                    {(() => {
+                      const prevWeek = addDays(week[0], -7);
+                      const canGoBack = week[0] > firstDate;
+                      return (
+                        <button
+                          type="button"
+                          disabled={!canGoBack}
+                          onClick={() => setWeekAnchor(prevWeek)}
+                          className={`p-1.5 rounded-lg ${canGoBack ? "text-[#FF5A00] cursor-pointer" : "text-zinc-400/40 cursor-not-allowed"}`}
+                          aria-label="Oldingi hafta"
+                        >
+                          <ChevronLeft className="w-4 h-4" />
+                        </button>
+                      );
+                    })()}
+                    <button
+                      type="button"
+                      onClick={() => setWeekAnchor(addDays(week[0], 7))}
+                      disabled={week[6] >= lastDate}
+                      className="p-1.5 rounded-lg text-[#FF5A00] cursor-pointer disabled:text-zinc-400/40"
+                      aria-label="Keyingi hafta"
+                    >
+                      <ChevronRight className="w-4 h-4" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowCalendar(true)}
+                      className="ml-1 px-2.5 py-1.5 rounded-lg bg-[#FF5A00]/10 text-[#FF5A00] text-xs font-bold flex items-center gap-1 cursor-pointer"
+                      aria-label="Kalendarni ochish"
+                    >
+                      <CalendarDays className="w-4 h-4" />
+                      Kalendar
+                    </button>
+                  </div>
+                </div>
+                <div className="grid grid-cols-7 gap-1.5">
+                  {week.map((date) => {
+                    const isSelected = selectedDate === date;
+                    const disabled = isUnavailable(date);
+                    return (
+                      <button
+                        key={date}
+                        type="button"
+                        disabled={disabled}
+                        onClick={() => setPickedDate(date)}
+                        className={`h-[78px] rounded-[16px] flex flex-col items-center justify-center transition-all ${
+                          isSelected
+                            ? "bg-[#FF5A00] text-white shadow-md shadow-[#FF5A00]/25 cursor-pointer"
+                            : disabled
+                              ? `${isDark ? "bg-[#2A2A2A]/50" : "bg-[#F5F5F7]/60"} text-zinc-400/50 cursor-not-allowed`
+                              : `${surface} cursor-pointer`
+                        }`}
+                      >
+                        {isSelected ? <Check className="w-3.5 h-3.5 stroke-[3] mb-0.5" /> : <div className="w-3.5 h-3.5 mb-0.5" />}
+                        <span className={`text-[11px] font-medium leading-none mb-1.5 ${isSelected ? "" : disabled ? "" : "text-[#FF5A00]"}`}>
+                          {WEEKDAY_SHORT[weekdayOf(date)]}
+                        </span>
+                        <span className="text-xl font-bold leading-none">{Number(date.slice(8, 10))}</span>
+                      </button>
+                    );
+                  })}
+                </div>
                 <p className="text-[11px] text-zinc-400">
-                  Chizilgan kunlar band yoki dam olish kuni.
+                  Kulrang kunlar band yoki dam olish kuni.
                   {venue.min_advance_booking_days > 0 && ` Kamida ${venue.min_advance_booking_days} kun oldin bron qilinadi.`}
                 </p>
               </div>
 
               <div className="space-y-3 pt-1">
-                <h3 className="text-base font-bold">To&apos;y qachon boshlanadi?</h3>
-                {!selectedDate ? (
-                  <p className="text-xs font-semibold text-zinc-400">Avval sanani tanlang.</p>
+                <h3 className="text-base font-bold">Vaqtni belgilash</h3>
+                {timeStrip.length === 0 ? (
+                  <p className="text-xs font-semibold text-zinc-400">Bu haftada bo&apos;sh kun yo&apos;q — kalendardan boshqa sanani tanlang.</p>
                 ) : (
                   <>
-                    <div className="grid grid-cols-4 gap-2.5">
-                      {times.map((t) => {
-                        const isSelected = selectedTime === t;
+                    <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none">
+                      {timeStrip.map(({ time, fits }) => {
+                        const isSelected = selectedTime === time;
+                        const enabled = Boolean(selectedDate) && fits;
                         return (
                           <button
-                            key={t}
+                            key={time}
                             type="button"
-                            onClick={() => setPickedTime(t)}
-                            className={`py-2.5 px-2 rounded-full flex items-center justify-center gap-1 transition-all text-xs font-semibold cursor-pointer ${
-                              isSelected ? "bg-[#FF5A00] text-white font-bold shadow-md shadow-[#FF5A00]/25" : surface
+                            disabled={!enabled}
+                            onClick={() => setPickedTime(time)}
+                            className={`py-2.5 px-4 rounded-xl flex items-center justify-center gap-1 shrink-0 transition-all text-sm font-bold ${
+                              isSelected
+                                ? "bg-[#FF5A00] text-white shadow-md shadow-[#FF5A00]/25 cursor-pointer"
+                                : enabled
+                                  ? `${surface} text-[#FF5A00] cursor-pointer`
+                                  : `${isDark ? "bg-[#2A2A2A]/50" : "bg-[#F5F5F7]/60"} text-zinc-400/50 cursor-not-allowed`
                             }`}
                           >
-                            {isSelected && <Check className="w-3 h-3 stroke-[3] shrink-0" />}
-                            <span>{t}</span>
+                            {isSelected && <Check className="w-3.5 h-3.5 stroke-[3] shrink-0" />}
+                            <span>{time}</span>
                           </button>
                         );
                       })}
                     </div>
                     <p className="text-[11px] text-zinc-400">
-                      {selectedTime
-                        ? `To'y ${selectedTime} da boshlanib, taxminan ${addHours(selectedTime, EVENT_HOURS)} gacha davom etadi.`
-                        : `Tadbir ${EVENT_HOURS} soat davom etadi.`}
+                      {!selectedDate
+                        ? "Avval sanani tanlang."
+                        : selectedTime
+                          ? `To'y ${selectedTime} da boshlanib, taxminan ${addHours(selectedTime, EVENT_HOURS)} gacha davom etadi.`
+                          : `Tadbir ${EVENT_HOURS} soat davom etadi.`}
                     </p>
                   </>
                 )}

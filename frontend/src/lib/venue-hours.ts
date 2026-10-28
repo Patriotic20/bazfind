@@ -6,29 +6,61 @@ export function weekdayOf(isoDate: string): number {
   return (parseApiDate(isoDate).getDay() + 6) % 7;
 }
 
+const toMinutes = (hhmm: string) => Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5));
+const toHHMM = (minutes: number) =>
+  `${String(Math.floor(minutes / 60) % 24).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
+
 /**
- * Whole hours a booking of `durationHours` fits into on that weekday, as
- * `"HH:00"`. Empty when the venue is closed that day or has no hours.
+ * Every start time on that weekday, `stepMinutes` apart from opening, with
+ * whether a booking of `durationHours` still fits before closing. Empty when the
+ * venue is closed that day or has no hours.
+ */
+export function startTimes(
+  hours: VenueWorkingHoursRead[],
+  weekday: number,
+  durationHours = 2,
+  stepMinutes = 60,
+): { time: string; fits: boolean }[] {
+  const day = hours.find((h) => h.weekday === weekday);
+  if (!day || day.is_closed || !day.opens_at || !day.closes_at) return [];
+  const open = Math.ceil(toMinutes(day.opens_at) / stepMinutes) * stepMinutes;
+  let close = toMinutes(day.closes_at);
+  // Closing at or before opening runs past midnight (10:00-02:00, or 00:00-00:00
+  // for round the clock). A booking still has to end the same day — the API
+  // takes an end after its start — so the last end is 23:00.
+  if (close <= toMinutes(day.opens_at)) close += 24 * 60;
+  const lastEnd = Math.min(close, 23 * 60);
+  const slots: { time: string; fits: boolean }[] = [];
+  for (let at = open; at < lastEnd; at += stepMinutes) {
+    slots.push({ time: toHHMM(at), fits: at + durationHours * 60 <= lastEnd });
+  }
+  return slots;
+}
+
+/**
+ * Start times a booking of `durationHours` fits into on that weekday, as
+ * `"HH:MM"`, on the hour unless a finer step is asked for.
  */
 export function slotsFor(
   hours: VenueWorkingHoursRead[],
   weekday: number,
   durationHours = 2,
+  stepMinutes = 60,
 ): string[] {
-  const day = hours.find((h) => h.weekday === weekday);
-  if (!day || day.is_closed || !day.opens_at || !day.closes_at) return [];
-  const open = Number(day.opens_at.slice(0, 2)) + (day.opens_at.slice(3, 5) === "00" ? 0 : 1);
-  let close = Number(day.closes_at.slice(0, 2));
-  // Closing at or before opening runs past midnight (10:00-02:00, or 00:00-00:00
-  // for round the clock). A booking still has to end the same day — the API
-  // takes an end after its start — so the last end is 23:00.
-  if (day.closes_at.slice(0, 5) <= day.opens_at.slice(0, 5)) close += 24;
-  const lastEnd = Math.min(close, 23);
-  const slots: string[] = [];
-  for (let hour = open; hour + durationHours <= lastEnd; hour++) {
-    slots.push(`${String(hour).padStart(2, "0")}:00`);
-  }
-  return slots;
+  return startTimes(hours, weekday, durationHours, stepMinutes)
+    .filter((slot) => slot.fits)
+    .map((slot) => slot.time);
+}
+
+/** The Monday-to-Sunday week holding `isoDate`, as seven `YYYY-MM-DD`. */
+export function weekOf(isoDate: string): string[] {
+  const monday = parseApiDate(isoDate);
+  monday.setDate(monday.getDate() - weekdayOf(isoDate));
+  return Array.from({ length: 7 }, (_, i) => {
+    const day = new Date(monday);
+    day.setDate(monday.getDate() + i);
+    return toApiDate(day);
+  });
 }
 
 /** The bookable days: `count` consecutive dates starting `leadDays` from today. */
