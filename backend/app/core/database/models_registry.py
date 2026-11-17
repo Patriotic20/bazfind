@@ -36,6 +36,13 @@ from app.modules.engagement.models import (
     SearchHistory,
 )
 from app.modules.geo.models import District, Region, UserRecentLocation
+from app.modules.hall_crm.models import (
+    HallBlock,
+    HallEvent,
+    HallReminderDismissal,
+    HallSettings,
+    HallTask,
+)
 from app.modules.media.models import MediaFile
 from app.modules.menu.models import (
     MenuCategory,
@@ -89,6 +96,11 @@ __all__ = [
     "District",
     "Favorite",
     "Friendship",
+    "HallBlock",
+    "HallEvent",
+    "HallReminderDismissal",
+    "HallSettings",
+    "HallTask",
     "MediaFile",
     "MenuCategory",
     "MenuItem",

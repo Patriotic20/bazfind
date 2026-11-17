@@ -68,6 +68,7 @@ app = FastAPI(
         {"name": "venue:services", "description": "Xizmatlarga narx belgilash."},
         {"name": "bookings", "description": "Mijoz bronlari — Joylar bo'limi."},
         {"name": "venue:bookings", "description": "Kutilayotgan mijozlar — kunlik navbat."},
+        {"name": "venue:hall", "description": "To'yxona CRM — kalendar, bronlar, vazifalar."},
         {"name": "venue:orders", "description": "Buyurtmalar — stollardagi ochiq cheklar."},
         {"name": "reviews", "description": "Sharhlar va reyting."},
         {"name": "engagement", "description": "Sevimlilar, suhbatlar va Xabarlar."},

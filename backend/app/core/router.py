@@ -18,6 +18,7 @@ from app.modules.bookings.api import router as bookings_router
 from app.modules.catalog.api import router as catalog_router
 from app.modules.engagement.api import router as engagement_router
 from app.modules.geo.api import router as geo_router
+from app.modules.hall_crm.api import router as hall_crm_router
 from app.modules.media.api import router as media_router
 from app.modules.menu.api import router as menu_router
 from app.modules.orders.api import router as orders_router
@@ -72,6 +73,7 @@ for module_router in (
     media_router,
     services_router,
     bookings_router,
+    hall_crm_router,
     orders_router,
     reviews_router,
     engagement_router,

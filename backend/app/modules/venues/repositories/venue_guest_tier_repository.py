@@ -1,8 +1,11 @@
 from collections.abc import Sequence
+from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import delete, exists, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.database.mixins import utcnow_naive
+from app.modules.bookings.models import Booking
 from app.modules.venues.models import VenueGuestTier
 
 
@@ -45,3 +48,36 @@ class VenueGuestTierRepository:
         self.session.add(tier)
         await self.session.flush()
         return tier
+
+    async def update_band(
+        self,
+        tier_id: int,
+        min_guests: int,
+        max_guests: int | None,
+        base_price: Decimal,
+        sort_order: int,
+    ) -> None:
+        # `updated_at` by hand: a raw UPDATE skips `onupdate`. See CONVENTIONS.md 11.
+        await self.session.execute(
+            update(VenueGuestTier)
+            .where(VenueGuestTier.id == tier_id)
+            .values(
+                min_guests=min_guests,
+                max_guests=max_guests,
+                base_price=base_price,
+                sort_order=sort_order,
+                updated_at=utcnow_naive(),
+            )
+        )
+        await self.session.flush()
+
+    async def is_referenced(self, tier_id: int) -> bool:
+        """Whether a booking was priced from this band — such a band cannot go."""
+        result = await self.session.execute(
+            select(exists().where(Booking.guest_tier_id == tier_id))
+        )
+        return bool(result.scalar())
+
+    async def delete(self, tier_id: int) -> None:
+        await self.session.execute(delete(VenueGuestTier).where(VenueGuestTier.id == tier_id))
+        await self.session.flush()

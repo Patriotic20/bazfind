@@ -45,6 +45,7 @@ from app.modules.bookings.schemas import (
     TableReservationCreate,
     VenueBookingRead,
 )
+from app.modules.hall_crm.services import HallAvailabilityService
 from app.modules.menu.models import MenuItem
 from app.modules.menu.repositories import MenuItemRepository
 from app.modules.services.enums import ServicePriceUnit
@@ -172,6 +173,10 @@ class BookingService:
         venue = await self._require_venue(payload.venue_id)
         await self._guard_lead_time(venue, payload.booking_date)
         await self._guard_open(venue.id, payload.booking_date, payload.start_time)
+        # Every hall taken in that session by the to'yxona's own CRM bookings.
+        await HallAvailabilityService(self.session).require_free(
+            venue.id, payload.booking_date, payload.start_time
+        )
 
         tier = await self.tiers.get_for_guest_count(venue.id, payload.guests_count)
         if tier is None:

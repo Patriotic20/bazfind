@@ -14,6 +14,7 @@ from app.modules.bookings.repositories import (
     VenueBlockedSlotRepository,
 )
 from app.modules.bookings.schemas import AvailableTableRead, BlockedDatesRead
+from app.modules.hall_crm.services import HallAvailabilityService
 from app.modules.venues.repositories import VenueRepository, VenueTableRepository
 
 AVAILABILITY_TTL_SECONDS = 300
@@ -72,8 +73,13 @@ class AvailabilityService:
         if venue is None:
             raise NotFoundError("Muassasa topilmadi")
 
-        dates = await self.bookings.blocked_dates_for_venue(venue_id, date_from, date_to)
-        return BlockedDatesRead(venue_id=venue_id, dates=list(dates))
+        dates = set(await self.bookings.blocked_dates_for_venue(venue_id, date_from, date_to))
+        # Days the to'yxona filled from its own CRM — phone and walk-in bookings —
+        # are just as taken for an online customer.
+        dates.update(
+            await HallAvailabilityService(self.session).closed_dates(venue_id, date_from, date_to)
+        )
+        return BlockedDatesRead(venue_id=venue_id, dates=sorted(dates))
 
     async def is_open_at(self, venue_id: int, booking_date: date_type, at: time) -> bool:
         return await self.venues.is_open_at(venue_id, datetime.combine(booking_date, at))

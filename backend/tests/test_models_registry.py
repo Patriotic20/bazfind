@@ -27,9 +27,10 @@ def test_registry_covers_every_model_file() -> None:
     # the API could not act on and the client now keeps it locally (2026-08-21).
     # 51 before `media_files` gave dish photos somewhere to be uploaded to
     # (2026-10-24).
-    assert len(model_files) == 52
-    assert len(Base.metadata.tables) == 52
-    assert len(models_registry.__all__) == 52
+    # 52 before the to'yxona CRM (`hall_crm`, 5) moved off the browser (2026-11-17).
+    assert len(model_files) == 57
+    assert len(Base.metadata.tables) == 57
+    assert len(models_registry.__all__) == 57
 
 
 def test_no_model_imports_another_modules_model() -> None:

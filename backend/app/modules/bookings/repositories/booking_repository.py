@@ -278,6 +278,15 @@ class BookingRepository:
         )
         return list(result.scalars().all())
 
+    async def list_hall_events_for_venue(self, venue_id: int) -> Sequence[Booking]:
+        """Every online to'yxona booking of a branch, for the CRM import."""
+        result = await self.session.execute(
+            select(Booking)
+            .where(Booking.venue_id == venue_id, Booking.kind == BookingKind.HALL_EVENT)
+            .order_by(Booking.booking_date, Booking.id)
+        )
+        return result.scalars().all()
+
     async def set_status(
         self, booking_id: int, status: str, now: datetime, reason: str | None = None
     ) -> Booking | None:
